@@ -1,4 +1,3 @@
-import configs
 import os
 
 from tqdm import tqdm
@@ -9,28 +8,17 @@ import time
 import json
 # import Levenshtein
 import csv
-from vocab import WordEmbedder, CharVocab, PosTagVocab
 import bisect
 # from PIL import Image
 import pdb
 import h5py
 
-char_vocab = CharVocab()
+from transformers import BertTokenizer
 
-glove_embedder = WordEmbedder(configs.glove_embeddings_path, configs.glove_embedding_dim) \
-    if configs.uses_glove_embeddings else None
-
-head_embedder = WordEmbedder(configs.head_embeddings_path, configs.raw_head_embedding_dim)
-
-pos_tag_vocab = PosTagVocab()
 
 id_to_genre = ('bc', 'bn', 'mz', 'nw', 'pt', 'tc', 'wb')
 genre_to_id = {genre: id_ for id_, genre in enumerate(id_to_genre)}
 genre_num = len(id_to_genre)
-
-names = ('train', 'test') if configs.training \
-    else ('test',) if configs.testing \
-    else ('test', 'dev')
 
 
 # names = 'test', 'dev'
@@ -47,11 +35,11 @@ names = ('train', 'test') if configs.training \
 #     return idxes_batch < len_batch.reshape(-1, 1)
 
 
-class Dataset(tud.Dataset):
+class PrpDataset(tud.Dataset):
     def __init__(self, name):
         self.name = name
-        self.examples = json.load(open(f'{configs.data_dir}/{self.name}.with-pos.json'))
-        self.elmo_cache = h5py.File(f'{configs.data_dir}/{self.name}.elmo.cache.hdf5', 'r', swmr=True)
+        self.examples = json.load(open(config[f'{name}_path']))
+        self.tokenizer = BertTokenizer.from_pretrained("bert-base-cased")
 
     def __len__(self):
         return len(self.examples)
@@ -62,13 +50,26 @@ class Dataset(tud.Dataset):
     def get_doc_key(self, example_idx):
         return self.examples[example_idx]['doc_key']
 
+    def get_pronoun_info(self, example_idx):
+        return self.examples[example_idx]['pronoun_info']
+
+    def get_sentences(self, example_idx):
+        return self.examples[example_idx]['sentences']
+
+    def get_speaker_dict(self, speakers):
+        speaker_dict = {'UNK': 0, '[SPL]': 1}
+        for s in speakers:
+            if s not in speaker_dict and len(speaker_dict) < self.config['max_num_speakers']:
+                speaker_dict[s] = len(speaker_dict)
+        return speaker_dict
+
     @staticmethod
     def truncate_example(example):
         sents = example['sentences']
         sent_num = len(sents)
         sent_lens = [len(sent) for sent in sents]
-        start_sent_idx = random.randint(0, sent_num - configs.max_sent_num)
-        end_sent_idx = start_sent_idx + configs.max_sent_num
+        start_sent_idx = random.randint(0, sent_num - config['max_sent_num'])
+        end_sent_idx = start_sent_idx + config['max_sent_num']
         start_word_idx = sum(sent_lens[:start_sent_idx])
         end_word_idx = sum(sent_lens[:end_sent_idx])
 
@@ -90,314 +91,129 @@ class Dataset(tud.Dataset):
             'start_sent_idx': start_sent_idx
         }
 
-    @staticmethod
-    def compact_sents(sents):
-        sent_num = len(sents)
-        sent_len_batch = [len(sent) for sent in sents]
-        max_sent_len = max(sent_len_batch)
-
-        compacted_sent_idxes_batch = []
-        compacted_sent_len_batch = []
-
-        for i in range(sent_num):
-            if compacted_sent_len_batch and compacted_sent_len_batch[-1] + sent_len_batch[i] < max_sent_len:
-                compacted_sent_idxes_batch[-1].append(i)
-                compacted_sent_len_batch[-1] += sent_len_batch[i]
-            else:
-                compacted_sent_idxes_batch.append([i])
-                compacted_sent_len_batch.append(sent_len_batch[i])
-
-        return compacted_sent_idxes_batch, compacted_sent_len_batch
-
 
     def __getitem__(self, example_idx):
         start_time = time.time()
 
         example = self.examples[example_idx]
 
-        if self.name == 'train' and len(example['sentences']) > configs.max_sent_num:
+        if self.name == 'train' and len(example['sentences']) > config['max_sent_num']:
+            raise ValueError(f'example {example_idx} needs truncation')
             example = Dataset.truncate_example(example)
-
 
         sents = example['sentences']
 
+        sentences = example["sentences"]
+        num_words = sum(len(s) for s in sentences)
+        speakers = example["speakers"]
+        speaker_dict = self.get_speaker_dict(util.flatten(speakers) + ['caption'])
 
-        orig_sent_num = len(sents)
-        orig_sent_len_batch = [len(sent) for sent in sents]
+        text_len = np.array([len(s) for s in sentences])
+        max_sentence_length = max(text_len)
 
-
-        if configs.compacts_sents:
-            compacted_sent_idxes_batch, compacted_sent_len_batch = Dataset.compact_sents(sents)
-        else:
-            compacted_sent_idxes_batch = [
-                [i]
-                for i in range(orig_sent_num)
-            ]
-            compacted_sent_len_batch = orig_sent_len_batch
-
-        compacted_sent_len_batch = torch.as_tensor(compacted_sent_len_batch)
-
-
-        max_sent_len = compacted_sent_len_batch.max().item()
-        doc_len = sum(orig_sent_len_batch)
-
-        assert doc_len == compacted_sent_len_batch.sum().item()
-
-        # compacted_sent_num = len(sents)
-        compacted_sent_num = len(compacted_sent_idxes_batch)
-
-        if configs.uses_char_embeddings:
-            max_word_len = max(
-                max(
-                    max(len(word) for word in sent)
-                    for sent in sents
-                ),
-                max(configs.cnn_kernel_widths)
-            )
-
-            # flat_char_ids_seq_batch = torch.zeros((compacted_sent_num, max_sent_len, max_word_len), dtype=torch.long)
-            # [doc_len, max_word_len]
-            flat_char_ids_seq_batch = torch.zeros(doc_len, max_word_len, dtype=torch.long)
-
-            curr_word_idx = 0
-
-            for i, sent in enumerate(sents):
-                for j, word in enumerate(sent):
-                    # sent_batch[i][j] = word
-                    flat_char_ids_seq_batch[curr_word_idx, :len(word)] = torch.as_tensor(
-                        [char_vocab[char] for char in word])
-                    curr_word_idx += 1
-
-
-        else:
-            flat_char_ids_seq_batch = torch.tensor(0)
+        input_ids, input_mask, speaker_ids = [], [], []
+        for i, (sentence, speaker) in enumerate(zip(sentences, speakers)):
+            sent_input_ids = self.tokenizer.encode(sentence, add_special_tokens=False)
+            sent_len = len(sent_input_ids)
+            sent_input_mask = [1] * sent_len
+            sent_speaker_ids = [speaker_dict.get(s, 3) for s in speaker]
+            sent_input_ids.extend([0] * (max_sentence_length - sent_len))
+            sent_input_mask.extend([0] * (max_sentence_length - sent_len))
+            sent_speaker_ids.extend([0] * (max_sentence_length - sent_len))
+            input_ids.append(sent_input_ids)
+            speaker_ids.append(sent_speaker_ids)
+            input_mask.append(sent_input_mask)
+        input_ids = torch.tensor(input_ids)
+        input_mask = torch.tensor(input_mask)
+        speaker_ids = torch.tensor(speaker_ids)
+        assert num_words == torch.sum(input_mask).item(), (num_words, torch.sum(input_mask))
 
         doc_key = example['doc_key'].replace('/', ':')
 
-        # try:
-        doc_cache = self.elmo_cache[doc_key]
-        elmo_layer_outputs_batch = torch.zeros(
-            compacted_sent_num, max_sent_len, configs.elmo_embedding_dim, configs.elmo_layer_num,
-            dtype=torch.float32
-        )
-
-        for i in range(compacted_sent_num):
-            curr_sent_len = 0
-
-            for orig_sent_idx in compacted_sent_idxes_batch[i]:
-                sent_key = str(orig_sent_idx + example.get('start_sent_idx', 0))
-                orig_sent_len = orig_sent_len_batch[orig_sent_idx]
-                elmo_layer_outputs_batch[i, curr_sent_len:(curr_sent_len + orig_sent_len)] \
-                    = torch.as_tensor(doc_cache[sent_key][...])
-                curr_sent_len += orig_sent_len
-
-            assert curr_sent_len == compacted_sent_len_batch[i]
-
-        # breakpoint()
-
-        # [doc_len, raw_head_embedding_dim]
-        head_embeddings = torch.stack(
-            [
-                head_embedder[word]
-                for sent in sents
-                for word in sent
-            ], dim=0
-        )
-
-        if configs.uses_glove_embeddings:
-            glove_embedding_seq_batch = torch.zeros(
-                compacted_sent_num, max_sent_len, glove_embedder.dim, dtype=torch.float32
-            )
-
-            for i, sent in enumerate(sents):
-                for j, word in enumerate(sent):
-                    glove_embedding_seq_batch[i, j] = glove_embedder[word]
-        else:
-            glove_embedding_seq_batch = torch.tensor(0)
-
-
-        speakers = [
-            speaker
-            for speakers_of_sent in example['speakers']
-            for speaker in speakers_of_sent
-        ]
-
-        speaker_to_id = {s: i for i, s in enumerate(set(speakers))}
-        speaker_ids = torch.as_tensor([speaker_to_id[s] for s in speakers])
-
         genre_id = torch.as_tensor([genre_to_id[doc_key[:2]]])
-
-        # [doc_len]
-        orig_sent_idxes = torch.as_tensor(
-            [
-                i
-                for i in range(orig_sent_num)
-                for _ in range(orig_sent_len_batch[i])
-            ]
-        )
 
         clusters = example['clusters']
 
-        gold_spans = sorted(
-            tuple(span) for cluster in clusters
-            for span in cluster
+        gold_mentions = sorted(
+            tuple(mention) for cluster in clusters
+            for mention in cluster
         )
 
-        # for s, e in gold_spans:
-        #     try:
-        #         assert isinstance(s, int)
-        #         assert isinstance(e, int)
-        #     except:
-        #         print(gold_spans)
-        #         exit()
-
-        gold_span_to_id = {
-            span: id_
-            for id_, span in enumerate(gold_spans)
+        gold_mention_to_id = {
+            mention: id_
+            for id_, mention in enumerate(gold_mentions)
         }
 
-        gold_start_idxes, gold_end_idxes = map(
+        gold_starts, gold_ends = map(
             # np.array,
             torch.as_tensor,
-            zip(*gold_spans) if gold_spans else ([], [])
+            zip(*gold_mentions) if gold_mentions else ([], [])
         )
 
-        # if gold_start_idxes.dtype != torch.long:
-        #     print(gold_spans)
-        #     exit()
-
-        gold_cluster_ids = torch.zeros(len(gold_spans), dtype=torch.long)
+        gold_cluster_ids = torch.zeros(len(gold_mentions), dtype=torch.long)
 
         for cluster_id, cluster in enumerate(clusters):
-            for span in cluster:
+            for mention in cluster:
                 # leave cluster_id of 0 for dummy
-                gold_cluster_ids[gold_span_to_id[tuple(span)]] = cluster_id + 1
+                gold_cluster_ids[gold_mention_to_id[tuple(mention)]] = cluster_id + 1
 
-        # [doc_len, max_span_width]
-        cand_start_idxes = torch.arange(doc_len).view(-1, 1).repeat(1, configs.max_span_width)
-        # [doc_len, max_span_width]
-        cand_cluster_ids = torch.zeros_like(cand_start_idxes)
+        # [num_words, max_span_width]
+        candidate_starts = torch.arange(num_words).view(-1, 1).repeat(1, config['max_span_width'])
+        # [num_words, max_span_width]
+        cand_cluster_ids = torch.zeros_like(candidate_starts)
 
-        if gold_spans:
-            # try:
-            gold_end_offsets = gold_end_idxes - gold_start_idxes
-            gold_span_mask = gold_end_offsets < configs.max_span_width
-            filtered_gold_start_idxes = gold_start_idxes[gold_span_mask]
-            filtered_gold_end_offsets = gold_end_offsets[gold_span_mask]
-            filtered_gold_cluster_ids = gold_cluster_ids[gold_span_mask]
-            cand_cluster_ids[filtered_gold_start_idxes, filtered_gold_end_offsets] = filtered_gold_cluster_ids
-            # except:
-            #     breakpoint()
+        if gold_mentions:
+            gold_end_offsets = gold_ends - gold_starts
+            gold_mention_mask = gold_end_offsets < config['max_span_width']
+            filtered_gold_starts = gold_starts[gold_mention_mask]
+            filtered_gold_end_offsets = gold_end_offsets[gold_mention_mask]
+            filtered_gold_cluster_ids = gold_cluster_ids[gold_mention_mask]
+            cand_cluster_ids[filtered_gold_starts, filtered_gold_end_offsets] = filtered_gold_cluster_ids
 
-        # [doc_len * max_span_width]
-        cand_end_idxes = (cand_start_idxes + torch.arange(configs.max_span_width).view(1, -1)).view(-1)
+        # [num_words * max_span_width]
+        candidate_ends = (candidate_starts + torch.arange(config['max_span_width']).view(1, -1)).view(-1)
 
-        # # [doc_len * max_span_width]
-        # cand_end_idxes = torch.clamp(
-        #     cand_start_idxes + torch.arange(configs.max_span_width).view(1, -1), max=(doc_len - 1)
-        # ).view(-1)
-
-        # [doc_len * max_span_width]
-        cand_start_idxes = cand_start_idxes.view(-1)
-        # [doc_len * max_span_width]
+        sentence_indices = example['sentence_map']
+        # remove cands with cand_ends >= num_words
+        # [num_words * max_span_width]
+        candidate_starts = candidate_starts.view(-1)
+        # [num_words * max_span_width]
         cand_cluster_ids = cand_cluster_ids.view(-1)
-        # [doc_len * max_span_width]
-        cand_mask = cand_end_idxes < doc_len
+        # [num_words * max_span_width]
+        cand_mask = candidate_ends < num_words
         # [cand_num]
-        cand_start_idxes = cand_start_idxes[cand_mask]
+        candidate_starts = candidate_starts[cand_mask]
         # [cand_num]
-        cand_end_idxes = cand_end_idxes[cand_mask]
+        candidate_ends = candidate_ends[cand_mask]
         # [cand_num]
         cand_cluster_ids = cand_cluster_ids[cand_mask]
+
         # [cand_num]
-        cand_start_sent_idxes = orig_sent_idxes[cand_start_idxes]
+        cand_start_sent_idxes = sentence_indices[candidate_starts]
         # [cand_num]
-        cand_end_sent_idxes = orig_sent_idxes[cand_end_idxes]
+        cand_end_sent_idxes = sentence_indices[candidate_ends]
         # [cand_num]
         cand_mask = (cand_start_sent_idxes == cand_end_sent_idxes)
+
+        # remove cands whose start and end not in the same sentences
         # [cand_num]
-        cand_start_idxes = cand_start_idxes[cand_mask]
+        candidate_starts = candidate_starts[cand_mask]
         # [cand_num]
-        cand_end_idxes = cand_end_idxes[cand_mask]
-        # # [cand_num]
-        # cand_sent_idxes = cand_start_sent_idxes[cand_mask]
+        candidate_ends = candidate_ends[cand_mask]
         # [cand_num]
         cand_cluster_ids = cand_cluster_ids[cand_mask]
 
-        if self.name == 'train':  # and compacted_sent_num > configs.max_sent_num:
-            assert compacted_sent_num <= configs.max_sent_num
-            # example_tensors = self.truncate(*example_tensors)
-
-        pos_tags = torch.as_tensor(example['pos'])
         # [cand_num]
         cand_mention_labels = cand_cluster_ids > 0
 
-        assert pos_tags.shape == (doc_len,)
-
-        return Dataset.tensorize(
-            example_idx,
-            glove_embedding_seq_batch, head_embeddings, elmo_layer_outputs_batch,
-            flat_char_ids_seq_batch, compacted_sent_len_batch, speaker_ids, genre_id,
-            gold_start_idxes, gold_end_idxes, gold_cluster_ids,
-            cand_start_idxes, cand_end_idxes, cand_cluster_ids,
-            # cand_sent_idxes,
-            pos_tags, cand_mention_labels
-        )
-
-
-    @staticmethod
-    def tensorize(
-        example_idx,
-        glove_embedding_seq_batch, head_embedding_seq_batch,
-        elmo_layer_outputs_batch, flat_char_ids_seq_batch, sent_len_batch, speaker_ids, genre_id,
-        gold_start_idxes, gold_end_idxes, gold_cluster_ids,
-        cand_start_idxes, cand_end_idxes, cand_cluster_ids,
-        # cand_sent_idxes,
-        pos_tags, cand_mention_labels
-    ):
         return (
             example_idx,
-            # (
-            # [sent_num, max_sent_len, glove_embedding_dim]
-            glove_embedding_seq_batch.cuda(),
-            # [doc_len, raw_head_embedding_dim]
-            head_embedding_seq_batch.cuda(),
-            # [sent_num, max_sent_len, elmo_embedding_dim, elmo_layer_num]
-            elmo_layer_outputs_batch.cuda(),
-            # [doc_len, max_word_len]
-            flat_char_ids_seq_batch.cuda(),
-            # [sent_num]
-            sent_len_batch,
-            # [doc_len]
-            speaker_ids,
-            # [1]
-            genre_id,
-            # [gold_num]
-            gold_start_idxes,
-            # [gold_num]
-            gold_end_idxes,
-            # [gold_num]
-            gold_cluster_ids,
-            # [cand_num]
-            cand_start_idxes,
-            # [cand_num]
-            cand_end_idxes,
-            # [cand_num]
-            cand_cluster_ids,
-            # # [cand_num]
-            # cand_sent_idxes,
-            # [doc_len]
-            pos_tags,
-            # [cand_num]
+            (input_ids, input_mask,
+            speaker_ids, genre_id,
+            gold_starts, gold_ends, gold_cluster_ids,
+            candidate_starts, candidate_ends, cand_cluster_ids),
             cand_mention_labels
-            # )
         )
-
-
-datasets = {
-    name: Dataset(name)
-    for name in names
-}
 
 
 def get_dataset_size(name):
@@ -418,7 +234,7 @@ def collate(batch):
     # breakpoint()
 
     # return batch
-    (example_idx, *tensors, pos_tags, cand_mention_labels), = batch
+    (example_idx, *tensors, cand_mention_labels), = batch
     # breakpoint()
 
     # assert tensors[2].dtype == np.float32
@@ -428,7 +244,6 @@ def collate(batch):
     return (
         example_idx,
         tensors,
-        pos_tags,
         cand_mention_labels
         # tuple(
         #     # map(
@@ -440,29 +255,20 @@ def collate(batch):
     )
 
 
-data_loaders = {
-    name: tud.DataLoader(
-        dataset=datasets[name],
-        batch_size=1,
-        shuffle=(name == 'train'),
-        # pin_memory=True,
-        collate_fn=collate,
-        # num_workers=4
-    )
-    for name in names
-}
+
 
 
 def gen_batches(name):
     instance_num = 0
 
-    for example_idx, tensors, pos_tags, cand_mention_labels in data_loaders[name]:
-        # ((example_idx, tensors),) = b
+    for example_idx, tensors, cand_mention_labels in data_loaders[name]:
         instance_num += 1
         pct = instance_num * 100. / len(datasets[name])
-        yield pct, example_idx, tensors, pos_tags, cand_mention_labels
+        tensors = (t.cuda() for t in tensor)
+        cand_mention_labels = cand_mention_labels.cuda()
+        yield pct, example_idx, tensors, cand_mention_labels
 
-        if configs.debugging:
+        if config['debugging']:
             break
 
         # torch.cuda.empty_cache()
@@ -493,17 +299,17 @@ def save_predictions(name, predictions):
 
 def get_doc_stats():
     for name in names:
-        max_doc_len = 0
+        max_num_words = 0
         max_sent_len = 0
 
         for example in datasets[name].examples:
-            if name == 'train' and len(example['sentences']) > configs.max_sent_num:
+            if name == 'train' and len(example['sentences']) > config['max_sent_num']:
                 example = Dataset.truncate_example(example)
 
-            max_doc_len = max(max_doc_len, sum(len(sent) for sent in example['sentences']))
+            max_num_words = max(max_num_words, sum(len(sent) for sent in example['sentences']))
             max_sent_len = max(max_sent_len, max(len(sent) for sent in example['sentences']))
 
-        print(f'{name}: max_doc_len = {max_doc_len}, max_sent_len = {max_sent_len}')
+        print(f'{name}: max_num_words = {max_num_words}, max_sent_len = {max_sent_len}')
 
 
 if __name__ == '__main__':

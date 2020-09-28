@@ -6,31 +6,39 @@ import os
 import errno
 import codecs
 import collections
+import datetime
 import json
 import math
 import shutil
 import sys
 
 import numpy as np
-import tensorflow as tf
 import pyhocon
 
 
-def initialize_from_env():
-    # if "GPU" in os.environ:
-    #     set_gpus(int(os.environ["GPU"]))
-    # else:
-    #     set_gpus()
-    set_gpus(5)
+def initialize_from_env(eval_test=False):
+    if "GPU" in os.environ:
+        set_gpus(int(os.environ["GPU"]))
 
     name = sys.argv[1]
     print("Running experiment: {}".format(name))
 
-    config = pyhocon.ConfigFactory.parse_file("experiments.conf")[name]
-    config["log_dir"] = mkdirs(os.path.join(config["log_root"], name))
+    if eval_test:
+        config = pyhocon.ConfigFactory.parse_file("test.experiments.conf")[name]
+    else:
+        config = pyhocon.ConfigFactory.parse_file("experiments.conf")[name]
+        config["log_dir"] = os.makedirs(os.path.join(config["log_root"], name))
+
+    config['timestamp'] = datetime.datetime.now().strftime('%m%d-%H%M%S')
 
     print(pyhocon.HOCONConverter.convert(config, "hocon"))
     return config
+
+
+def set_gpus(*gpus):
+    # pass
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in gpus)
+    print("Setting CUDA_VISIBLE_DEVICES to: {}".format(os.environ["CUDA_VISIBLE_DEVICES"]))  
 
 
 def copy_checkpoint(source, target):

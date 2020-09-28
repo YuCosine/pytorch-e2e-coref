@@ -1,85 +1,104 @@
-import configs
-from model_utils import *
-from modules import *
+from model_utils import init_params, build_len_mask_batch
+from modules import Squeezer
 import data_utils
 from functools import cmp_to_key
 import time
+import torch
+from torch import nn
 
 
 class Model(nn.Module):
-    def __init__(self):
+    def __init__(self, config):
         super().__init__()
 
-        self.char_cnn_embedder = CharCnnEmbedder(
-            vocab_size=data_utils.char_vocab.size, padding_id=data_utils.char_vocab.unk_id
-        ) if configs.uses_char_embeddings else None
-        self.elmo_layer_output_mixer = ElmoLayerOutputMixer().cuda()
-        self.encoder = DocEncoder(
-            input_size=configs.tot_embedding_dim,
-            pos_tag_vocab_size=data_utils.pos_tag_vocab.size
-        ).cuda()
+        self.config = config
+
+        self.encoder = BertModel.from_pretrained('bert-base-cased')
 
         self.span_width_embedder = nn.Embedding(
-            num_embeddings=configs.max_span_width,
-            embedding_dim=configs.span_width_embedding_dim
+            num_embeddings=self.config['max_span_width'],
+            embedding_dim=self.config['feature_size']
         )
         self.head_scorer = nn.Sequential(
-            nn.Linear(configs.rnn_hidden_size, 1),
-            Squeezer(dim=-1)
-        )
-        self.mention_scorer = nn.Sequential(
-            nn.Linear(configs.span_embedding_dim, configs.ffnn_hidden_size),
-            nn.ReLU(),
-            nn.Dropout(configs.dropout_prob),
-            nn.Linear(configs.ffnn_hidden_size, configs.ffnn_hidden_size),
-            nn.ReLU(),
-            nn.Dropout(configs.dropout_prob),
-            nn.Linear(configs.ffnn_hidden_size, 1),
+            nn.Linear(self.config['rnn_hidden_size'], 1),
             Squeezer(dim=-1)
         )
 
-        # self.fast_ant_scoring_mat = nn.Parameter(
-        #     torch.randn(configs.span_embedding_dim, configs.span_embedding_dim, requires_grad=True)
-        # )
+        span_embedding_dim = self.config['span_embedding_dim'] * 3 + self.config['feature_size']
+        self.mention_scorer = nn.Sequential(
+            nn.Linear(span_embedding_dim, self.config['ffnn_hidden_size']),
+            nn.ReLU(),
+            nn.Dropout(self.config['dropout_prob']),
+            nn.Linear(self.config['ffnn_hidden_size'], self.config['ffnn_hidden_size']),
+            nn.ReLU(),
+            nn.Dropout(self.config['dropout_prob']),
+            nn.Linear(self.config['ffnn_hidden_size'], 1),
+            Squeezer(dim=-1)
+        )
+
+        self.span_width_scorer = nn.Sequential(
+            nn.Embedding(
+                num_embeddings=self.config['max_span_width'],
+                embedding_dim=self.config['feature_size']
+            ),
+            nn.Linear(self.config['feature_size'], self.config['ffnn_hidden_size']),
+            nn.ReLU(),
+            nn.Dropout(self.config['dropout_prob']),
+            nn.Linear(self.config['ffnn_hidden_size'], self.config['ffnn_hidden_size']),
+            nn.ReLU(),
+            nn.Dropout(self.config['dropout_prob']),
+            nn.Linear(self.config['ffnn_hidden_size'], 1),
+            Squeezer(dim=-1)
+        )
+
+        self.ant_distance_scorer = nn.Sequential(
+            nn.Embedding(
+                num_embeddings=10,
+                embedding_dim=self.config['feature_size']
+            ),
+            nn.Dropout(self.config['dropout_prob']),
+            nn.Linear(self.config['feature_size'], 1),
+            Squeezer(dim=-1)
+        )        
 
         self.src_span_projector = nn.Linear(
-            configs.span_embedding_dim, configs.span_embedding_dim
+            span_embedding_dim, span_embedding_dim
         )
 
         self.genre_embedder = nn.Embedding(
             num_embeddings=data_utils.genre_num,
-            embedding_dim=configs.genre_embedding_dim
+            embedding_dim=self.config['feature_size']
         )
 
         self.speaker_pair_embedder = nn.Embedding(
             num_embeddings=2,
-            embedding_dim=configs.speaker_pair_embedding_dim
+            embedding_dim=self.config['feature_size']
         )
 
         self.ant_offset_embedder = nn.Embedding(
             num_embeddings=10,
-            embedding_dim=configs.ant_offset_embedding_dim
+            embedding_dim=self.config['feature_size']
         )
 
+        pair_embedding_dim = (span_embedding_dim + feature_size) * 3
         self.slow_ant_scorer = nn.Sequential(
-            nn.Linear(configs.pair_embedding_dim, configs.ffnn_hidden_size),
+            nn.Linear(pair_embedding_dim, self.config['ffnn_hidden_size']),
             nn.ReLU(),
-            nn.Dropout(configs.dropout_prob),
-            nn.Linear(configs.ffnn_hidden_size, configs.ffnn_hidden_size),
+            nn.Dropout(self.config['dropout_prob']),
+            nn.Linear(self.config['ffnn_hidden_size'], self.config['ffnn_hidden_size']),
             nn.ReLU(),
-            nn.Dropout(configs.dropout_prob),
-            nn.Linear(configs.ffnn_hidden_size, 1),
+            nn.Dropout(self.config['dropout_prob']),
+            nn.Linear(self.config['ffnn_hidden_size'], 1),
             Squeezer(dim=-1)
         )
 
         self.attended_span_embedding_gate = nn.Sequential(
-            nn.Linear(configs.span_embedding_dim * 2, configs.span_embedding_dim),
+            nn.Linear(span_embedding_dim * 2, span_embedding_dim),
             nn.Sigmoid()
         )
 
         self.init_params()
 
-        # # print(self)
 
     def init_params(self):
         self.apply(init_params)
@@ -87,10 +106,10 @@ class Model(nn.Module):
     def get_trainable_params(self):
         yield from filter(lambda param: param.requires_grad, self.parameters())
 
-    def embed_spans(self, head_embedding_seq, encoded_doc, start_idxes, end_idxes):
-        doc_len, _ = encoded_doc.shape
+    def get_span_emb(self, head_emb, mention_doc, start_idxes, end_idxes):
+        num_words = mention_doc.size(0)
 
-        start_embeddings, end_embeddings = encoded_doc[start_idxes], encoded_doc[end_idxes]
+        start_embeddings, end_embeddings = mention_doc[start_idxes], mention_doc[end_idxes]
 
         # [span_num]
         span_widths = end_idxes - start_idxes + 1
@@ -100,31 +119,32 @@ class Model(nn.Module):
 
         # [span_num, span_width_embedding_dim]
         span_width_embeddings = F.dropout(
-            self.span_width_embedder(span_width_ids.cuda()),
-            p=configs.dropout_prob, training=self.training
+            self.span_width_embedder(span_width_ids),
+            p=self.config['dropout_prob'], training=self.training
         )
 
         # [span_num, max_span_width]
         idxes_of_spans = torch.clamp(
-            torch.arange(configs.max_span_width).view(1, -1) + start_idxes.view(-1, 1),
-            max=(doc_len - 1)
+            torch.arange(self.config['max_span_width'], dtype=start_idxes.dtype, device=start_idxes.device).view(1, -1)\
+                + start_idxes.view(-1, 1),
+            max=(num_words - 1)
         )
 
         # [span_num, max_span_width, span_width_embedding_dim]
-        embeddings_of_spans = head_embedding_seq[idxes_of_spans]
+        embeddings_of_spans = head_emb[idxes_of_spans]
 
-        # [doc_len]
-        self.head_scores = self.head_scorer(encoded_doc)
+        # [num_words]
+        self.head_scores = self.head_scorer(mention_doc)
 
         # [span_num, max_span_width]
         head_scores_of_spans = self.head_scores[idxes_of_spans]
 
         # [span_num, max_span_width]
-        span_masks = build_len_mask_batch(span_widths, configs.max_span_width).view(-1, configs.max_span_width)
+        span_masks = build_len_mask_batch(span_widths, self.config['max_span_width']).view(-1, self.config['max_span_width'])
         # [span_num, max_span_width]
-        head_scores_of_spans += torch.log(span_masks.float()).cuda()
+        head_scores_of_spans.masked_fill_(~span_masks, -float('inf'))
         # [span_num, max_span_width, 1]
-        attentions_of_spans = F.softmax(head_scores_of_spans, dim=1).view(-1, configs.max_span_width, 1)
+        attentions_of_spans = F.softmax(head_scores_of_spans, dim=1).unsqueeze(2)
 
         # [span_num, span_width_embedding_dim]
         attended_head_embeddings = (attentions_of_spans * embeddings_of_spans).sum(dim=1)
@@ -143,12 +163,12 @@ class Model(nn.Module):
         # [cand_num]
         span_scores,
         # [cand_num]
-        cand_start_idxes,
+        candidate_starts,
         # [cand_num]
-        cand_end_idxes,
+        candidate_ends,
         top_span_num,
     ):
-        span_num, = span_scores.shape
+        span_num = span_scores.size(0)
 
         sorted_span_idxes = torch.argsort(span_scores, descending=True).tolist()
 
@@ -161,8 +181,8 @@ class Model(nn.Module):
 
         for span_idx in sorted_span_idxes:
             crossed = False
-            start_idx = cand_start_idxes[span_idx]
-            end_idx = cand_end_idxes[span_idx]
+            start_idx = candidate_starts[span_idx]
+            end_idx = candidate_ends[span_idx]
 
             if end_idx == start_idx_to_max_end_idx.get(start_idx, -1):
                 continue
@@ -190,13 +210,13 @@ class Model(nn.Module):
                 break
 
         def compare_span_idxes(i1, i2):
-            if cand_start_idxes[i1] < cand_start_idxes[i2]:
+            if candidate_starts[i1] < candidate_starts[i2]:
                 return -1
-            elif cand_start_idxes[i1] > cand_start_idxes[i2]:
+            elif candidate_starts[i1] > candidate_starts[i2]:
                 return 1
-            elif cand_end_idxes[i1] < cand_end_idxes[i2]:
+            elif candidate_ends[i1] < candidate_ends[i2]:
                 return -1
-            elif cand_end_idxes[i1] > cand_end_idxes[i2]:
+            elif candidate_ends[i1] > candidate_ends[i2]:
                 return 1
             # elif i1 < i2:
             #     return -1
@@ -214,7 +234,7 @@ class Model(nn.Module):
         #
         # for i in range(len(top_span_idxes)):
         #     span_idx = top_span_idxes[i]
-        #     start_idx, end_idx = cand_start_idxes[span_idx], cand_end_idxes[span_idx]
+        #     start_idx, end_idx = candidate_starts[span_idx], candidate_ends[span_idx]
         #
         #     assert start_idx <= end_idx
         #
@@ -229,97 +249,45 @@ class Model(nn.Module):
 
     def forward(
         self,
-        # [sent_num, max_sent_len, glove_embedding_dim]
-        glove_embedding_seq_batch,
-        # [doc_len, raw_head_embedding_dim]
-        head_embeddings,
-        # [sent_num, max_sent_len, elmo_embedding_dim, elmo_layer_num]
-        elmo_layer_outputs_batch,
-        # [doc_len, max_word_len]
-        flat_char_ids_seq_batch,
-        # [sent_num]
-        sent_len_batch,
-        # [doc_len]
+        # [num_seg, num_words]
+        input_ids,
+        # [num_seg, num_words]
+        input_mask,
+        # [num_seg, num_words]
         speaker_ids,
         # [1]
         genre_id,
         # [gold_num]
-        gold_start_idxes,
+        gold_starts,
         # [gold_num]
-        gold_end_idxes,
+        gold_ends,
         # [gold_num]
         gold_cluster_ids,
         # [cand_num]
-        cand_start_idxes,
+        candidate_starts,
         # [cand_num]
-        cand_end_idxes,
+        candidate_ends,
         # [cand_num]
         cand_cluster_ids,
-        # # [cand_num]
-        # cand_sent_idxes
     ):
         start_time = time.time()
 
-        sent_num, max_sent_len, *_ = elmo_layer_outputs_batch.shape
+        # [num_seg, num_words, hidden_size]
+        mention_doc = self.model(input_ids, attention_mask=input_mask)[0]
+        mention_doc = self.flatten_emb_by_sentence(mention_doc, input_mask)
 
-        # [sent_num, max_sent_len, feature_num], [doc_len, feature_num]
-        char_embedding_seq_batch, flat_char_embedding_seq_batch = \
-            self.char_cnn_embedder(flat_char_ids_seq_batch, sent_len_batch) \
-                if configs.uses_char_embeddings else (None, None)
-        elmo_embedding_seq_batch = self.elmo_layer_output_mixer(elmo_layer_outputs_batch)
-
-        embedding_seq_batches = []
-
-        if configs.uses_glove_embeddings:
-            embedding_seq_batches.append(glove_embedding_seq_batch)
-
-        head_embeddings_list = [head_embeddings]
-
-        if configs.uses_char_embeddings:
-            embedding_seq_batches.append(char_embedding_seq_batch)
-            head_embeddings_list.append(flat_char_embedding_seq_batch)
-
-        embedding_seq_batches.append(elmo_embedding_seq_batch)
-
-        # [sent_num, max_sent_len, tot_embedding_dim]
-        word_embedding_seq_batch = torch.cat(embedding_seq_batches, dim=-1)
-        # [doc_len, head_embedding_dim]
-        head_embeddings = torch.cat(head_embeddings_list, dim=-1)
-        # [sent_num, max_sent_len, tot_embedding_dim]
-        word_embedding_seq_batch = F.dropout(
-            word_embedding_seq_batch, p=configs.embedding_dropout_prob, training=self.training
-        )
-        # [doc_len, head_embedding_dim]
-        head_embeddings = F.dropout(
-            head_embeddings, p=configs.embedding_dropout_prob, training=self.training
-        )
-
-        # try:
-        # [sent_num, max_sent_len]
-        len_mask_batch = build_len_mask_batch(sent_len_batch, max_sent_len)
-        # except:
-        #     breakpoint()
-
-        # [doc_len, hidden_size], [doc_len, pos_tag_num]
-        encoded_doc, pos_tag_logits = self.encoder(word_embedding_seq_batch, sent_len_batch, len_mask_batch)
-
-        doc_len, _ = encoded_doc.shape
-
-        assert doc_len == sent_len_batch.sum().item()
-
-        # # [doc_len, head_emb]
-        # head_embeddings = head_embedding_seq_batch[len_mask_batch]
+        num_words = mention_doc.size(0)
 
         # [cand_num, span_embedding_dim]
-        cand_span_embeddings = self.embed_spans(
-            head_embeddings, encoded_doc,
-            cand_start_idxes, cand_end_idxes
+        candidate_span_emb = self.get_span_emb(
+            mention_doc, mention_doc,
+            candidate_starts, candidate_ends
         )
 
         # [cand_num]
-        cand_mention_scores = self.mention_scorer(cand_span_embeddings)
+        cand_mention_scores = self.get_mention_scores(candidate_span_emb, candidate_starts, candidate_ends)
 
-        top_cand_num = int(doc_len * configs.top_span_ratio)
+        top_cand_num = int(num_words * self.config['top_span_ratio'])
 
         # print('extracting top spans')
 
@@ -328,16 +296,16 @@ class Model(nn.Module):
             # [cand_num]
             cand_mention_scores,
             # [cand_num]
-            cand_start_idxes,
+            candidate_starts,
             # [cand_num]
-            cand_end_idxes,
+            candidate_ends,
             top_cand_num,
         )
 
-        top_start_idxes = cand_start_idxes[top_span_idxes]
-        top_end_idxes = cand_end_idxes[top_span_idxes]
+        top_start_idxes = candidate_starts[top_span_idxes]
+        top_end_idxes = candidate_ends[top_span_idxes]
         # [top_cand_num, span_embedding_dim]
-        top_span_embeddings = cand_span_embeddings[top_span_idxes]
+        top_span_embeddings = candidate_span_emb[top_span_idxes]
         # [top_cand_num]
         top_span_cluster_ids = cand_cluster_ids[top_span_idxes]
         # [top_cand_num]
@@ -351,7 +319,7 @@ class Model(nn.Module):
         # except:
         #     breakpoint()
 
-        pruned_ant_num = min(configs.max_ant_num, top_cand_num)
+        pruned_ant_num = min(self.config['max_top_antecedents'], top_cand_num)
 
         # print('pruning ants')
 
@@ -370,41 +338,26 @@ class Model(nn.Module):
             pruned_ant_num
         )
 
-        # # print(top_fast_ant_scores_of_spans.device)
+        # leave out segment distance here
 
         # top_fast_ant_scores_of_spans = top_fast_ant_scores_of_spans.to(torch.device(1))
 
+        device = top_fast_ant_scores_of_spans.device
         # [top_cand_num, 1]
-        dummy_scores = torch.zeros(top_cand_num, 1).cuda()
+        dummy_scores = torch.zeros(top_cand_num, 1, device=device)
         # top_span_embeddings = top_span_embeddings.to(torch.device(1))
 
         top_ant_scores_of_spans = None
 
         # [genre_embedding_dim]
-        genre_embedding = self.genre_embedder(genre_id.view(1, 1).cuda()).view(-1)
+        genre_embedding = self.genre_embedder(genre_id.view(1, 1).to(device)).view(-1)
 
-        list_of_top_ant_scores_of_spans = []
-
-        if configs.supervises_multi_layers_of_ant_scores:
-            list_of_top_ant_scores_of_spans.append(
-                torch.cat(
-                    (
-                        # [top_cand_num, 1]
-                        dummy_scores,
-                        # [top_cand_num, pruned_ant_num]
-                        top_fast_ant_scores_of_spans
-                    ), dim=1
-                )
-            )
-
-        for i in range(configs.coref_depth):
+        for i in range(self.config['coref_depth']):
             # for i in range(1):
             # print(f'depth {i}')
 
             # [top_span_num, pruned_ant_num, span_embedding_dim]
             top_ant_embeddings_of_spans = top_span_embeddings[top_ant_idxes_of_spans]
-            # [top_cand_num, pruned_ant_num]
-            top_ant_scores_of_spans = top_fast_ant_scores_of_spans
             top_slow_ant_scores_of_spans = self.get_slow_ant_scores_of_spans(
                 # [top_cand_num, span_embedding_dim]
                 top_span_embeddings,
@@ -420,7 +373,8 @@ class Model(nn.Module):
                 genre_embedding
             )
 
-            top_ant_scores_of_spans += top_slow_ant_scores_of_spans
+            # [top_cand_num, pruned_ant_num]
+            top_ant_scores_of_spans = top_fast_ant_scores_of_spans + top_slow_ant_scores_of_spans
 
             # [top_cand_num, 1 + pruned_ant_num]
             top_ant_scores_of_spans = torch.cat(
@@ -429,25 +383,10 @@ class Model(nn.Module):
                     dummy_scores,
                     # [top_cand_num, pruned_ant_num]
                     top_ant_scores_of_spans
-
-                    # # [top_span_num, pruned_ant_num]
-                    # top_fast_ant_scores_of_spans
                 ), dim=1
             )
 
-            if configs.supervises_multi_layers_of_ant_scores:
-                list_of_top_ant_scores_of_spans.append(
-                    torch.cat(
-                        (
-                            # [top_cand_num, 1]
-                            dummy_scores,
-                            # [top_cand_num, pruned_ant_num]
-                            top_slow_ant_scores_of_spans
-                        ), dim=1
-                    )
-                )
-
-            if i == configs.coref_depth - 1:
+            if i == self.config['coref_depth'] - 1:
                 break
 
             # [top_cand_num, 1 + pruned_ant_num]
@@ -479,8 +418,6 @@ class Model(nn.Module):
             top_span_embeddings = g * attended_top_span_embeddings + (1. - g) * top_span_embeddings
             # top_span_embeddings = attended_top_span_embeddings
 
-        list_of_top_ant_scores_of_spans.append(top_ant_scores_of_spans)
-
         # [top_cand_num, pruned_ant_num]
         top_ant_cluster_ids_of_spans = top_span_cluster_ids[top_ant_idxes_of_spans]
 
@@ -508,13 +445,11 @@ class Model(nn.Module):
             # [top_cand_num, pruned_ant_num]
             top_ant_cluster_ids_of_spans,
             # # [top_cand_num, 1 + pruned_ant_num]
-            # top_ant_scores_of_spans,
+            top_ant_scores_of_spans,
             # 4 * [top_cand_num, 1 + pruned_ant_num]
-            list_of_top_ant_scores_of_spans,
+            # list_of_top_ant_scores_of_spans,
             # [top_span_num, pruned_ant_num]
             top_ant_mask_of_spans,
-            # [doc_len, pos_tag_num]
-            pos_tag_logits,
             # [top_span_num, 1 + top_span_num], [top_span_num, top_span_num]
             full_fast_ant_scores_of_spans, full_ant_mask_of_spans
         )
@@ -534,17 +469,17 @@ class Model(nn.Module):
         # [genre_embedding_dim]
         genre_embedding
     ):
-        top_span_num, pruned_ant_num = top_ant_idxes_of_spans.shape
+        top_span_num, pruned_ant_num = top_ant_idxes_of_spans.size()
         # [top_span_num, pruned_ant_num]
         top_ant_speaker_ids_of_spans = top_span_speaker_ids[top_ant_idxes_of_spans]
         # [top_span_num, pruned_ant_num, speaker_pair_embedding_dim]
         speaker_pair_embeddings_of_spans = self.speaker_pair_embedder(
             # [top_span_num, pruned_ant_num]
-            (top_span_speaker_ids.view(-1, 1) == top_ant_speaker_ids_of_spans).long().cuda()
+            (top_span_speaker_ids.view(-1, 1) == top_ant_speaker_ids_of_spans).long().to(top_span_embeddings.device)
         )
         # [top_span_num, pruned_ant_num, ant_offset_embedding_dim]
         ant_offset_embeddings_of_spans = self.ant_offset_embedder(
-            Model.get_offset_bucket_idxes_batch(top_ant_offsets_of_spans).cuda()
+            self.get_offset_bucket_idxes_batch(top_ant_offsets_of_spans).to(top_span_embeddings.device)
         )
         feature_embeddings_of_spans = torch.cat(
             (
@@ -556,7 +491,7 @@ class Model(nn.Module):
         )
         # [top_span_num, pruned_ant_num, feature_size * 3]
         feature_embeddings_of_spans = F.dropout(
-            feature_embeddings_of_spans, p=configs.dropout_prob, training=self.training
+            feature_embeddings_of_spans, p=self.config['dropout_prob'], training=self.training
         )
         # [top_span_num, pruned_ant_num, span_embedding_dim] * [top_cand_num, 1, span_embedding_dim]
         similarity_embeddings_of_spans = top_ant_embeddings_of_spans \
@@ -577,7 +512,7 @@ class Model(nn.Module):
 
         # print(pair_embeddings_of_spans.shape)
         # [top_span_num, pruned_ant_num]
-        slow_ant_scores_of_spans = self.slow_ant_scorer(pair_embeddings_of_spans.cuda()).cuda()
+        slow_ant_scores_of_spans = self.slow_ant_scorer(pair_embeddings_of_spans)
         # [top_span_num, pruned_ant_num]
         return slow_ant_scores_of_spans
 
@@ -589,18 +524,23 @@ class Model(nn.Module):
         top_span_mention_scores,
         pruned_ant_num
     ):
-        top_span_num, _ = top_span_embeddings.shape
+        top_span_num = top_span_embeddings.size(0)
 
         span_idxes = torch.arange(top_span_num)
         # [top_span_num, top_span_num]
-        ant_offsets_of_spans = span_idxes.view(-1, 1) - span_idxes.view(1, -1)
+        antecedent_offsets = span_idxes.view(-1, 1) - span_idxes.view(1, -1)
         # [top_span_num, top_span_num]
-        full_ant_mask_of_spans = ant_offsets_of_spans >= 1
+        full_ant_mask_of_spans = antecedent_offsets >= 1
         # [top_span_num, top_span_num]
         full_fast_ant_scores_of_spans = top_span_mention_scores.view(-1, 1) + top_span_mention_scores.view(1, -1)
-        # full_fast_ant_scores_of_spans = full_fast_ant_scores_of_spans.cuda(1)
-        full_fast_ant_scores_of_spans += torch.log(full_ant_mask_of_spans.float()).cuda()
+        full_fast_ant_scores_of_spans.masked_fill_(~full_ant_mask_of_spans, -float('inf'))
         full_fast_ant_scores_of_spans += self.get_fast_ant_scores_of_spans(top_span_embeddings)
+
+        # [top_span_num, top_span_num]
+        antecedent_distance_buckets = self.bucket_distance(antecedent_offsets)
+        distance_scores = self.ant_distance_scorer(torch.arange(self.self.config["max_span_width"], device=top_span_embeddings.device).unsqueeze(1))
+        antecedent_distance_scores = distance_scores[antecedent_distance_buckets]
+        full_fast_ant_scores_of_spans += antecedent_distance_scores
 
         # [top_span_num, pruned_ant_num]
         _, top_ant_idxes_of_spans = torch.topk(
@@ -615,7 +555,7 @@ class Model(nn.Module):
         # [top_span_num, pruned_ant_num]
         top_fast_ant_scores_of_spans = full_fast_ant_scores_of_spans[span_idxes, top_ant_idxes_of_spans]
         # [top_span_num, pruned_ant_num]
-        top_ant_offsets_of_spans = ant_offsets_of_spans[span_idxes, top_ant_idxes_of_spans]
+        top_ant_offsets_of_spans = antecedent_offsets[span_idxes, top_ant_idxes_of_spans]
 
         return (
             # [top_span_num, pruned_ant_num], [top_span_num, pruned_ant_num]
@@ -636,10 +576,10 @@ class Model(nn.Module):
         # [top_cand_num, span_embedding_dim]
         top_src_span_embeddings = F.dropout(
             self.src_span_projector(top_span_embeddings),
-            p=configs.dropout_prob, training=self.training
+            p=self.config['dropout_prob'], training=self.training
         )
         # [top_cand_num, span_embedding_dim]
-        top_tgt_span_embeddings = F.dropout(top_span_embeddings, p=configs.dropout_prob, training=self.training)
+        top_tgt_span_embeddings = F.dropout(top_span_embeddings, p=self.config['dropout_prob'], training=self.training)
         # [top_span_num, top_span_num] = # [top_cand_num, span_embedding_dim] @ [span_embedding_dim, top_cand_num]
         return top_src_span_embeddings @ top_tgt_span_embeddings.t()
 
@@ -648,8 +588,32 @@ class Model(nn.Module):
         #         F.dropout(
         #             top_span_embeddings @ self.fast_ant_scoring_mat,
         #
-        #         ) @ F.dropout(top_span_embeddings, p=configs.dropout_prob, training=self.training).t()
+        #         ) @ F.dropout(top_span_embeddings, p=self.config['dropout_prob'], training=self.training).t()
         # ).cuda()
+
+
+    def flatten_emb_by_sentence(self, emb, text_len_mask):
+        num_sentences = emb.size(0)
+        max_sentence_length = emb.size(1)
+
+        emb_rank = len(emb.size())
+        if emb_rank == 2:
+          flattened_emb = emb.reshape(num_sentences * max_sentence_length)
+        elif emb_rank == 3:
+          flattened_emb = emb.reshape(num_sentences * max_sentence_length, emb.size(2))
+        else:
+            raise ValueError("Unsupported rank: {}".format(emb_rank))
+        return flattened_emb[text_len_mask.reshape(num_sentences * max_sentence_length)]
+
+
+    def get_mention_scores(self, span_emb, span_starts, span_ends):
+        span_scores = self.mention_scorer(span_emb)
+        width_scores = self.span_width_scorer(torch.arange(self.self.config["max_span_width"], device=span_starts.device).unsqueeze(1))
+        span_width_index = span_ends - span_starts # [NC]
+        width_scores = width_scores[span_width_index]
+        span_scores += width_scores
+        return span_scores
+
 
     @staticmethod
     def get_offset_bucket_idxes_batch(offsets_batch):

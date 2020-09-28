@@ -46,6 +46,18 @@ ckpt_id = args.ckpt
 loads_best_ckpt = args.b
 loads_ckpt = args.l
 
+# training
+next_logging_pct = 5.
+next_evaluating_pct = 20.
+
+# optimizer
+reset_optim = "none"
+bert_learning_rate = 1e-5
+task_learning_rate = 2e-4
+decay_method = "linear"
+decay_method_bert = "linear"
+max_grad_norm = 1.0
+
 seed = args.seed if args.seed is not None else int(time.time())
 # print(f'seed={seed}')
 torch.manual_seed(seed)
@@ -80,39 +92,13 @@ configs_pys_dir = Dir('configs_pys')
 
 shutil.copyfile('configs.py', f'{configs_pys_dir}/configs.{timestamp}.py')
 
-
-# lm_ckpts_dir = 'lm_ckpts'
-
-best_ckpt_path = f'{ckpts_dir}/ckpt.best'
-
-uses_glove_embeddings = False
-uses_char_embeddings = False
-
-glove_embeddings_path = 'glove.840B.300d.txt.filtered' if training else 'glove.840B.300d.txt'
-glove_embedding_dim = 300 if uses_glove_embeddings else 0
-head_embeddings_path = 'glove_50_300_2.txt'
-raw_head_embedding_dim = 300
-
 max_sent_num = 50
 
-elmo_embedding_dim = 1024
-elmo_layer_num = 3
-
-char_embedding_dim = 8
-cnn_kernel_widths = [3, 4, 5]
-# cnn_kernel_nums = [75, 75, 75]
-cnn_kernel_nums = [50, 50, 50]
-char_feature_num = sum(cnn_kernel_nums) if uses_char_embeddings else 0
-
-head_embedding_dim = raw_head_embedding_dim + char_feature_num
-
-# rnn_hidden_size = 200 * 2
-rnn_hidden_size = 200 * 2
-rnn_layer_num = 3
-
+# TODO
 
 genre_embedding_dim = 20
 span_width_embedding_dim = 20
+ant_distance_embedding_dim = 20
 speaker_pair_embedding_dim = 20
 ant_offset_embedding_dim = 20
 span_embedding_dim = rnn_hidden_size * 2 + span_width_embedding_dim + head_embedding_dim
@@ -129,7 +115,7 @@ ffnn_hidden_size = 150
 
 top_span_ratio = .4
 
-max_ant_num = 50
+max_top_antecedents = 50
 
 coref_depth = 2
 
@@ -248,7 +234,6 @@ use_multi_head_attention = False
 layer_idx_for_pos_tag_prediction = -1
 assert -1 <= layer_idx_for_pos_tag_prediction < rnn_layer_num
 predicts_pos_tags = layer_idx_for_pos_tag_prediction > -1
-supervises_multi_layers_of_ant_scores = True
 supervises_unpruned_fast_ant_scores = False
 supervises_mention_scores = False
 
