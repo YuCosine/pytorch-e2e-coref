@@ -80,7 +80,7 @@ class Model(nn.Module):
             embedding_dim=self.config['feature_size']
         )
 
-        pair_embedding_dim = (span_embedding_dim + feature_size) * 3
+        pair_embedding_dim = (span_embedding_dim + self.config['feature_size']) * 3
         self.slow_ant_scorer = nn.Sequential(
             nn.Linear(pair_embedding_dim, self.config['ffnn_hidden_size']),
             nn.ReLU(),

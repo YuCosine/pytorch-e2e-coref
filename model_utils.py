@@ -21,9 +21,9 @@ import configs
 # from scipy.interpolate import interp1d
 # from sklearn.metrics import roc_curve
 
-random.seed()
-np.random.seed()
-torch.cuda.seed_all()
+# random.seed()
+# np.random.seed()
+# torch.cuda.seed_all()
 
 
 def init_params(module):
@@ -342,7 +342,8 @@ class AdamWeightDecay(Optimizer):
     """
 
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
-                 weight_decay=0, amsgrad=False):
+                 weight_decay=0, amsgrad=False,
+                 exclude_from_weight_decay=["LayerNorm", "layer_norm", "bias"]):
         if not 0.0 <= lr:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if not 0.0 <= eps:
@@ -353,6 +354,7 @@ class AdamWeightDecay(Optimizer):
             raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
         if not 0.0 <= weight_decay:
             raise ValueError("Invalid weight_decay value: {}".format(weight_decay))
+        self.exclude_from_weight_decay = exclude_from_weight_decay
         defaults = dict(lr=lr, betas=betas, eps=eps,
                         weight_decay=weight_decay, amsgrad=amsgrad)
         super(Adam, self).__init__(params, defaults)
@@ -426,7 +428,13 @@ class AdamWeightDecay(Optimizer):
                 # Instead we want ot decay the weights in a manner that doesn't interact
                 # with the m/v parameters. This is equivalent to adding the square
                 # of the weights to the loss with plain (non-momentum) SGD.
-                if group['weight_decay'] != 0:
+                use_wd = True
+                for exclude_name in self.exclude_from_weight_decay:
+                    # TODO: check the key of name
+                    if exclude_name in group['name']:
+                        use_wd = False
+                        break
+                if use_wd and group['weight_decay'] != 0:
                     update.add_(p, alpha=group['weight_decay'])
 
                 p.add_(update, alpha=-group['lr'])

@@ -11,3 +11,5 @@ pos_tag_vocab.py
 preprocess.py
 run_different_seeds.py
 test.py
+__pycache__/
+sftp-config.json

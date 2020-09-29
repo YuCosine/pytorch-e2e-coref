@@ -41,6 +41,21 @@ def set_gpus(*gpus):
     print("Setting CUDA_VISIBLE_DEVICES to: {}".format(os.environ["CUDA_VISIBLE_DEVICES"]))  
 
 
+
+def set_log_file(fname):
+    # set log file
+    # simple tricks for duplicating logging destination in the logging module such as:
+    # logging.getLogger().addHandler(logging.FileHandler(filename))
+    # does NOT work well here, because python Traceback message (not via logging module) is not sent to the file,
+    # the following solution (copied from : https://stackoverflow.com/questions/616645) is a little bit
+    # complicated but simulates exactly the "tee" command in linux shell, and it redirects everything
+
+    # sys.stdout = os.fdopen(sys.stdout.fileno(), 'wb', 0)
+    tee = subprocess.Popen(['tee', fname], stdin=subprocess.PIPE)
+    os.dup2(tee.stdin.fileno(), sys.stdout.fileno())
+    os.dup2(tee.stdin.fileno(), sys.stderr.fileno())
+
+
 def copy_checkpoint(source, target):
     for ext in (".index", ".data-00000-of-00001"):
         shutil.copyfile(source + ext, target + ext)

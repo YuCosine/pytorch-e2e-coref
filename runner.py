@@ -8,7 +8,7 @@ from torch import nn, optim
 import argparse
 
 from model import Model
-from util import initialize_from_env
+from util import initialize_from_env, set_log_file
 from log import log
 import data_utils
 from data_utils import PrpDataset
@@ -37,6 +37,8 @@ class Runner:
 
         if self.config["max_ckpt_to_keep"] > 0:
             self.ckpt_queue = deque([], maxlen=config["max_ckpt_to_keep"])
+
+        self.writer = TensorboardWriter(config["log_dir"])
 
     @staticmethod
     def compute_ant_loss(
@@ -171,8 +173,9 @@ class Runner:
         loss.backward()
         self.optimizer.step()
 
+
     def train(self):
-        if self.config['ckpt_id'] or self.config['loads_ckpt'] or self.config['loads_best_ckpt']:
+        if os.path.exists(self.config['log_dir']) or self.config['loads_ckpt'] or self.config['loads_best_ckpt']:
             self.load_ckpt()
 
         # if torch.cuda.device_count() > 1:
@@ -436,13 +439,15 @@ class Runner:
                 f'Coref average f1:\t{epoch_f1}\n'
             )
 
+            self.writer
+
             pr_coref_results = pr_coref_evaluator.get_prf()
 
             print(
                 f'avg_valid_time:\t{time.time() - start_time}\n'
-                f'Pronoun Coref average precision:\t{pr_coref_results['p']}\n'
-                f'Pronoun Coref average recall:\t{pr_coref_results['r']}\n'
-                f'Pronoun Coref average f1:\t{pr_coref_results['f']}\n'
+                f'Pronoun Coref average precision:\t{pr_coref_results["p"]}\n'
+                f'Pronoun Coref average recall:\t{pr_coref_results["r"]}\n'
+                f'Pronoun Coref average f1:\t{pr_coref_results["f"]}\n'
             )
 
             return pr_coref_results['f']
@@ -451,7 +456,7 @@ class Runner:
         return {
             'epoch_idx': self.epoch_idx,
             'max_f1': self.max_f1,
-            'seed': self.config['seed'],
+            'seed': self.config['random_seed'],
             'model': self.model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             # 'embedder_optimizer': self.embedder_optimizer.state_dict() if not self.config['freezes_embeddings'] else None,
@@ -474,6 +479,7 @@ class Runner:
         )
 
         self.model.load_state_dict(model_state_dict)
+        print('loaded model')
         del model_state_dict
 
         if not (self.config['uses_new_optimizer'] or self.config['sets_new_lr']):
@@ -489,41 +495,25 @@ class Runner:
     ckpt = property(get_ckpt, set_ckpt)
 
     def save_ckpt(self):
-        ckpt_path = f'{self.config['log_dir']}/{self.config['timestamp']}.{self.epoch_idx}.ckpt'
+        ckpt_path = f'{self.config["log_dir"]}/epoch_{self.epoch_idx}.ckpt'
         print(f'saving checkpoint {ckpt_path}')
         torch.save(self.ckpt, f=ckpt_path)
         return ckpt_path
 
-    @staticmethod
-    def to_timestamp_and_epoch_idx(ckpt_path_):
-        date, time, epoch_idx = map(int, re.split(r'[-.]', ckpt_path_[:ckpt_path_.find('.ckpt')]))
-        return date, time, epoch_idx
-
     def load_ckpt(self, ckpt_path=None):
         if not ckpt_path:
             if self.config['loads_best_ckpt']:
-                ckpt_path = f'{self.config['log_dir']}/best.ckpt'
+                ckpt_path = f'{self.config["log_dir"]}/best.ckpt'
             else:
-                ckpt_paths = [path for path in os.listdir(f'{self.config['log_dir']}/') if path.endswith('.ckpt')]
-                ckpt_path = f'{self.config['log_dir']}/{sorted(ckpt_paths, key=Runner.to_timestamp_and_epoch_idx)[-1]}'
+                ckpt_paths = [path for path in os.listdir(f'{self.config["log_dir"]}/') if path.endswith('.ckpt')]
+                if len(ckpt_path) == 0:
+                    print(f'No .ckpt found in {self.config["log_dir"]}')
+                    return
+                ckpt_path = f'{self.config["log_dir"]}/{sorted(ckpt_paths, key=lambda x:int(re.search(r'(\d+)', x).groups(0)))}'
 
         print(f'loading checkpoint {ckpt_path}')
 
         self.ckpt = torch.load(ckpt_path)
-
-
-def set_log_file(fname):
-    # set log file
-    # simple tricks for duplicating logging destination in the logging module such as:
-    # logging.getLogger().addHandler(logging.FileHandler(filename))
-    # does NOT work well here, because python Traceback message (not via logging module) is not sent to the file,
-    # the following solution (copied from : https://stackoverflow.com/questions/616645) is a little bit
-    # complicated but simulates exactly the "tee" command in linux shell, and it redirects everything
-
-    # sys.stdout = os.fdopen(sys.stdout.fileno(), 'wb', 0)
-    tee = subprocess.Popen(['tee', fname], stdin=subprocess.PIPE)
-    os.dup2(tee.stdin.fileno(), sys.stdout.fileno())
-    os.dup2(tee.stdin.fileno(), sys.stderr.fileno())
 
 
 if __name__ == '__main__':
@@ -537,13 +527,9 @@ if __name__ == '__main__':
     config["log_dir"] = os.path.join(args.log_dir, args.model)
     if not os.path.exists(config["log_dir"]):
       os.makedirs(config["log_dir"])
-    writer = tf.summary.FileWriter(config["log_dir"], flush_secs=20)
-    log_file = os.path.join(config["log_dir"], f'{args.mode}.{config['timestamp']}.log')
+    
+    log_file = os.path.join(config["log_dir"], f'{args.mode}.log')
     set_log_file(log_file)
-
-    config["max_f1_path"] = osp.join(config["log_dir"], f'max_f1.{config['timestamp']}.txt')
-    with open(config["max_f1_path"], 'w') as max_f1_file:
-        print(0., file=max_f1_file)
 
     # initialization
     config = initialize_from_env()
@@ -558,8 +544,10 @@ if __name__ == '__main__':
     config['validating'] = args.mode == 'eval'
 
     # prepare dataset
-    names = ('train', 'val') if config['training'] \
-        else ('test',) if config['validating'] \
+    if config['training']:
+        names = ('train', 'val')
+    elif config['validating']: 
+        names = ('test',) 
     datasets = {
         name: PrpDataset(name)
         for name in names

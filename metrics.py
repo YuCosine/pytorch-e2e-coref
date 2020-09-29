@@ -153,15 +153,6 @@ class PrCorefEvaluator(object):
         self.all_coreference = 0
         self.predict_coreference = 0
         self.correct_predict_coreference = 0
-        # for not cap only
-        self.all_coref_not_cap_only = 0
-        self.predict_coref_not_cap_only = 0
-        self.correct_predict_coref_not_cap_only = 0
-        # for cap only
-        self.all_coref_cap_only = 0
-        self.predict_coref_cap_only = 0
-        self.correct_predict_coref_cap_only = 0
-
         self.pronoun_list = ['she', 'her', 'he', 'him', 'them', 'they', 'She', 'Her', 'He', 'Him', 'Them', 'They', 'it', 'It', 'his', 'hers', 'its', 'their', 'theirs', 'His', 'Hers', 'Its', 'Their', 'Theirs']
 
     def get_prf(self):
@@ -169,43 +160,23 @@ class PrCorefEvaluator(object):
         results['p'] = 0 if self.predict_coreference == 0 else self.correct_predict_coreference / self.predict_coreference
         results['r'] = 0 if self.all_coreference == 0 else self.correct_predict_coreference / self.all_coreference
         results['f'] = 0 if results['p'] + results['r'] == 0 else 2 * results['p'] * results['r'] / (results['p'] + results['r'])
-        results['p_not_cap_only'] = 0 if self.predict_coref_not_cap_only == 0 else self.correct_predict_coref_not_cap_only / self.predict_coref_not_cap_only
-        results['r_not_cap_only'] = 0 if self.all_coref_not_cap_only == 0 else self.correct_predict_coref_not_cap_only / self.all_coref_not_cap_only
-        results['f_not_cap_only'] = 0 if results['p_not_cap_only'] + results['r_not_cap_only'] == 0 else 2 * results['p_not_cap_only'] * results['r_not_cap_only'] / (results['p_not_cap_only'] + results['r_not_cap_only'])
-        results['p_cap_only'] = 0 if self.predict_coref_cap_only == 0 else self.correct_predict_coref_cap_only / self.predict_coref_cap_only
-        results['r_cap_only'] = 0 if self.all_coref_cap_only == 0 else self.correct_predict_coref_cap_only / self.all_coref_cap_only
-        results['f_cap_only'] = 0 if results['p_cap_only'] + results['r_cap_only'] == 0 else 2 * results['p_cap_only'] * results['r_cap_only'] / (results['p_cap_only'] + results['r_cap_only'])
 
         return results
 
 
-    def update(self, predicted_clusters, pronoun_info, sentences, tokens_np=None):
+    def update(self, predicted_clusters, pronoun_info, sentences):
         all_sentence = list()
         predicted_clusters = [tuple(pc) for pc in predicted_clusters]
 
         for s in sentences:
             all_sentence += s
 
-        if tokens_np is not None:
-            tokens_np_len = np.sum(tokens_np != '', axis=1)
-            tokens_np_end = np.cumsum(tokens_np_len) + len(all_sentence) - 2
-            neg_nps = []
-            for neg_end, neg_len in zip(tokens_np_end, tokens_np_len):
-                neg_nps.append([neg_end - neg_len + 3, neg_end])
-
         for pronoun_example in pronoun_info:
             tmp_pronoun_index = pronoun_example['current_pronoun'][0]
 
             tmp_candidate_NPs = pronoun_example['candidate_NPs']
-            if tokens_np is not None:
-                tmp_candidate_NPs += neg_nps
             tmp_correct_candidate_NPs = pronoun_example['correct_NPs']
 
-            if pronoun_example['coreference_in_cap_only']:
-                self.all_coref_cap_only += len(tmp_correct_candidate_NPs)
-            else:
-                self.all_coref_not_cap_only += len(tmp_correct_candidate_NPs)
-           
             find_pronoun = False
             for coref_cluster in predicted_clusters:
                 for mention in coref_cluster:
@@ -231,18 +202,10 @@ class PrCorefEvaluator(object):
                                 continue
                             matched_cdd_np_ids.append(matched_np_id)
                             self.predict_coreference += 1
-                            if pronoun_example['coreference_in_cap_only']:
-                                self.predict_coref_cap_only += 1
-                            else:
-                                self.predict_coref_not_cap_only += 1
                             matched_np_id = verify_correct_NP_match(tmp_mention_span, tmp_correct_candidate_NPs, 'cover', matched_crr_np_ids)
                             if matched_np_id is not None:
                                 matched_crr_np_ids.append(matched_np_id)
                                 self.correct_predict_coreference += 1
-                                if pronoun_example['coreference_in_cap_only']:
-                                    self.correct_predict_coref_cap_only += 1
-                                else:
-                                    self.correct_predict_coref_not_cap_only += 1
                     break
 
             self.all_coreference += len(tmp_correct_candidate_NPs)

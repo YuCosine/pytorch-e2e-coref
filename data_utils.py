@@ -255,9 +255,6 @@ def collate(batch):
     )
 
 
-
-
-
 def gen_batches(name):
     instance_num = 0
 
