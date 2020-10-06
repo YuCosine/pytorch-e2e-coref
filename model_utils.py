@@ -343,7 +343,7 @@ class AdamWeightDecay(Optimizer):
 
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
                  weight_decay=0, amsgrad=False,
-                 exclude_from_weight_decay=["LayerNorm", "layer_norm", "bias"]):
+                 exclude_from_weight_decay=['bias', 'LayerNorm.bias', 'LayerNorm.weight']):
         if not 0.0 <= lr:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if not 0.0 <= eps:

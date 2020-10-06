@@ -34,6 +34,7 @@ class Runner:
 
         self.epoch_idx = 0
         self.max_f1 = 0.
+        self.max_f1_epoch_idx = 0
 
         if self.config["max_ckpt_to_keep"] > 0:
             self.ckpt_queue = deque([], maxlen=config["max_ckpt_to_keep"])
@@ -227,8 +228,6 @@ class Runner:
                     full_fast_ant_scores_of_spans, full_ant_mask_of_spans
                 ) = self.model(*input_tensors)
 
-                loss = 0.
-
                 ant_loss = Runner.compute_ant_loss(
                     # [cand_num]
                     cand_mention_scores,
@@ -268,35 +267,21 @@ class Runner:
 
                     next_logging_pct += self.config["next_logging_pct"]
 
+                    iter_now = int(len(PrpDataset) * (epoch_idx + pct))
+                    self.writer.add_scalar('Train/loss', avg_loss, iter_now)
+
+
                 if pct >= next_evaluating_pct:
-                    avg_f1 = self.evaluate()
+                    iter_now = int(len(PrpDataset) * (epoch_idx + pct))
+                    avg_f1 = self.evaluate(iter_now)
 
                     if avg_f1 > self.max_f1:
                         self.max_f1 = avg_f1
+                        self.max_f1_epoch_idx = epoch_idx + pct
 
-                        max_f1_file = open(self.config['max_f1_path'])
-
-                        if avg_f1 > float(max_f1_file.readline().strip()):
-                            ckpt_path = self.save_ckpt()
-
-                            if self.config["max_ckpt_to_keep"] > 0:
-                                if len(self.checkpoint_queue) == self.checkpoint_queue.maxlen:
-                                    todel = self.checkpoint_queue.popleft()
-                                    os.remove(todel)
-                                self.checkpoint_queue.append(ckpt_path)
-
-                            max_f1_file.close()
-                            max_f1_file = open(self.config['max_f1_path'], 'w')
-                            print(avg_f1, file=max_f1_file)
-                            best_ckpt_path = ckpt_path.replace(f'{self.epoch_idx}.ckpt', 'best.ckpt')
-                            shutil.copyfile(ckpt_path, best_ckpt_path)
-                            print(f'Saving {best_ckpt_path}.')
-
-                        max_f1_file.close()
+                        ckpt_path = self.save_ckpt_best()
 
                     next_evaluating_pct += self.config["next_evaluating_pct"]
-
-                    # self.evaluate()
 
             avg_epoch_loss /= batch_num
 
@@ -306,7 +291,9 @@ class Runner:
                 f'100%,\ttime:\t{time.time() - start_time} avg_epoch_loss:\t{avg_epoch_loss}'
             )
 
-            avg_f1 = self.evaluate()
+
+            iter_now = int(len(PrpDataset) * (epoch_idx + pct))
+            avg_f1 = self.evaluate(iter_now)
             ckpt_path = self.save_ckpt()
 
             if self.config["max_ckpt_to_keep"] > 0:
@@ -317,23 +304,17 @@ class Runner:
 
             if avg_f1 > self.max_f1:
                 self.max_f1 = avg_f1
+                self.max_f1_epoch_idx = epoch_idx + 1
 
-                max_f1_file = open(self.config['max_f1_path'])
-
-                if avg_f1 > float(max_f1_file.readline().strip()):
-                    max_f1_file.close()
-                    max_f1_file = open(self.config['max_f1_path'], 'w')
-                    print(avg_f1, file=max_f1_file)
-                    self.save_ckpt()
-                    shutil.copyfile(ckpt_path, ckpt_path.replace(f'{self.epoch_idx}.ckpt', 'best.ckpt'))
-                    best_ckpt_path = ckpt_path.replace(f'{self.epoch_idx}.ckpt', 'best.ckpt')
-                    shutil.copyfile(ckpt_path, best_ckpt_path)
-                    print(f'Saving {best_ckpt_path}.')
-
-                max_f1_file.close()
+                best_ckpt_path = ckpt_path.replace(f'{self.epoch_idx}.ckpt', 'best.ckpt')
+                shutil.copyfile(ckpt_path, best_ckpt_path)
+                print(f'Saving {best_ckpt_path}.')
+            elif epoch_idx - self.max_f1_epoch_idx > self.config["early_stop_epoch"]:
+                print('Early stop.')
+                break
 
 
-    def evaluate(self, name='test', saves_results=False):
+    def evaluate(self, iter_now=0, name='test', saves_results=False):
         # from collections import Counter
         # span_len_cnts = Counter()
 
@@ -344,6 +325,7 @@ class Runner:
 
             self.model.eval()
             batch_num = 0
+            avg_loss = 0.
             next_logging_pct = 10.
             start_time = time.time()
             cluster_predictions = {}
@@ -375,6 +357,34 @@ class Runner:
                     # [top_span_num, 1 + top_span_num], [top_span_num, top_span_num]
                     full_fast_ant_scores_of_spans, full_ant_mask_of_spans
                 ) = self.model(*input_tensors)
+
+
+                ant_loss = Runner.compute_ant_loss(
+                    # [cand_num]
+                    cand_mention_scores,
+                    # [top_cand_num]
+                    top_start_idxes,
+                    # [top_cand_num]
+                    top_end_idxes,
+                    # [top_cand_num]
+                    top_span_cluster_ids,
+                    # [top_span_num, pruned_ant_num]
+                    top_ant_idxes_of_spans,
+                    # [top_cand_num, pruned_ant_num]
+                    top_ant_cluster_ids_of_spans,
+                    # # [top_cand_num, 1 + pruned_ant_num]
+                    top_ant_scores_of_spans,
+                    # 4 * [top_cand_num, 1 + pruned_ant_num]
+                    # list_of_top_ant_scores_of_spans,
+                    # [top_span_num, pruned_ant_num]
+                    top_ant_mask_of_spans,
+                    # [top_span_num, 1 + top_span_num], [top_span_num, top_span_num]
+                    full_fast_ant_scores_of_spans, full_ant_mask_of_spans
+                )
+
+                loss = ant_loss
+
+                avg_loss += loss.item()
 
                 (
                     top_start_idxes, top_end_idxes, predicted_ant_idxes,
@@ -429,17 +439,22 @@ class Runner:
                     next_logging_pct += 5.
 
             epoch_precision, epoch_recall, epoch_f1 = evaluator.get_prf()
+            avg_loss = avg_loss / batch_num
 
             na_str = 'N/A'
 
             print(
                 f'avg_valid_time:\t{time.time() - start_time}\n'
+                f'avg loss:\t{avg_loss}\n'
                 f'Coref average precision:\t{epoch_precision}\n'
                 f'Coref average recall:\t{epoch_recall}\n'
                 f'Coref average f1:\t{epoch_f1}\n'
             )
 
-            self.writer
+            self.writer.add_scalar('Val/loss', avg_loss, iter_now)
+            self.writer.add_scalar('Val/coref precision', epoch_precision, iter_now)
+            self.writer.add_scalar('Val/coref recall', epoch_recall, iter_now)
+            self.writer.add_scalar('Val/coref f1', epoch_f1, iter_now)
 
             pr_coref_results = pr_coref_evaluator.get_prf()
 
@@ -449,6 +464,10 @@ class Runner:
                 f'Pronoun Coref average recall:\t{pr_coref_results["r"]}\n'
                 f'Pronoun Coref average f1:\t{pr_coref_results["f"]}\n'
             )
+
+            self.writer.add_scalar('Val/pronoun coref precision', pr_coref_results['p'], iter_now)
+            self.writer.add_scalar('Val/pronoun coref recall', pr_coref_results['r'], iter_now)
+            self.writer.add_scalar('Val/pronoun coref f1', pr_coref_results['f'], iter_now)
 
             return pr_coref_results['f']
 
@@ -496,6 +515,12 @@ class Runner:
 
     def save_ckpt(self):
         ckpt_path = f'{self.config["log_dir"]}/epoch_{self.epoch_idx}.ckpt'
+        print(f'saving checkpoint {ckpt_path}')
+        torch.save(self.ckpt, f=ckpt_path)
+        return ckpt_path
+
+    def save_best_ckpt(self):
+        ckpt_path = f'{self.config["log_dir"]}/best.ckpt'
         print(f'saving checkpoint {ckpt_path}')
         torch.save(self.ckpt, f=ckpt_path)
         return ckpt_path

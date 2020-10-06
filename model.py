@@ -273,7 +273,7 @@ class Model(nn.Module):
         start_time = time.time()
 
         # [num_seg, num_words, hidden_size]
-        mention_doc = self.model(input_ids, attention_mask=input_mask)[0]
+        mention_doc = self.encoder(input_ids, attention_mask=input_mask)[0]
         mention_doc = self.flatten_emb_by_sentence(mention_doc, input_mask)
 
         num_words = mention_doc.size(0)
