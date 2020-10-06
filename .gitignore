@@ -13,3 +13,4 @@ run_different_seeds.py
 test.py
 __pycache__/
 sftp-config.json
+.idea/

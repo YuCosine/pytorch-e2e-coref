@@ -574,7 +574,7 @@ if __name__ == '__main__':
     elif config['validating']: 
         names = ('test',) 
     datasets = {
-        name: PrpDataset(name)
+        name: PrpDataset(name, config)
         for name in names
     }
     data_loaders = {

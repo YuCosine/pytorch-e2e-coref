@@ -13,7 +13,9 @@ import bisect
 import pdb
 import h5py
 
-from transformers import BertTokenizer
+import torch.utils.data as tud
+
+from transformers import AutoTokenizer
 
 
 id_to_genre = ('bc', 'bn', 'mz', 'nw', 'pt', 'tc', 'wb')
@@ -36,10 +38,11 @@ genre_num = len(id_to_genre)
 
 
 class PrpDataset(tud.Dataset):
-    def __init__(self, name):
+    def __init__(self, name, config):
         self.name = name
-        self.examples = json.load(open(config[f'{name}_path']))
-        self.tokenizer = BertTokenizer.from_pretrained("bert-base-cased")
+        self.config = config
+        self.examples = json.load(open(self.config[f'{name}_path']))
+        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-cased", cache_dir=self.config['bert_cache_dir'])
 
     def __len__(self):
         return len(self.examples)
@@ -64,12 +67,12 @@ class PrpDataset(tud.Dataset):
         return speaker_dict
 
     @staticmethod
-    def truncate_example(example):
+    def truncate_example(example, max_sent_num):
         sents = example['sentences']
         sent_num = len(sents)
         sent_lens = [len(sent) for sent in sents]
-        start_sent_idx = random.randint(0, sent_num - config['max_sent_num'])
-        end_sent_idx = start_sent_idx + config['max_sent_num']
+        start_sent_idx = random.randint(0, sent_num - max_sent_num)
+        end_sent_idx = start_sent_idx + max_sent_num
         start_word_idx = sum(sent_lens[:start_sent_idx])
         end_word_idx = sum(sent_lens[:end_sent_idx])
 
@@ -97,9 +100,9 @@ class PrpDataset(tud.Dataset):
 
         example = self.examples[example_idx]
 
-        if self.name == 'train' and len(example['sentences']) > config['max_sent_num']:
+        if self.name == 'train' and len(example['sentences']) > self.config['max_sent_num']:
             raise ValueError(f'example {example_idx} needs truncation')
-            example = Dataset.truncate_example(example)
+            example = Dataset.truncate_example(example, self.config['max_sent_num'])
 
         sents = example['sentences']
 
@@ -113,7 +116,8 @@ class PrpDataset(tud.Dataset):
 
         input_ids, input_mask, speaker_ids = [], [], []
         for i, (sentence, speaker) in enumerate(zip(sentences, speakers)):
-            sent_input_ids = self.tokenizer.encode(sentence, add_special_tokens=False)
+            # sent_input_ids = self.tokenizer.encode(sentence, add_special_tokens=False)
+            sent_input_ids = self.tokenizer.convert_tokens_to_ids(sentence)
             sent_len = len(sent_input_ids)
             sent_input_mask = [1] * sent_len
             sent_speaker_ids = [speaker_dict.get(s, 3) for s in speaker]
@@ -158,20 +162,20 @@ class PrpDataset(tud.Dataset):
                 gold_cluster_ids[gold_mention_to_id[tuple(mention)]] = cluster_id + 1
 
         # [num_words, max_span_width]
-        candidate_starts = torch.arange(num_words).view(-1, 1).repeat(1, config['max_span_width'])
+        candidate_starts = torch.arange(num_words).view(-1, 1).repeat(1, self.config['max_span_width'])
         # [num_words, max_span_width]
         cand_cluster_ids = torch.zeros_like(candidate_starts)
 
         if gold_mentions:
             gold_end_offsets = gold_ends - gold_starts
-            gold_mention_mask = gold_end_offsets < config['max_span_width']
+            gold_mention_mask = gold_end_offsets < self.config['max_span_width']
             filtered_gold_starts = gold_starts[gold_mention_mask]
             filtered_gold_end_offsets = gold_end_offsets[gold_mention_mask]
             filtered_gold_cluster_ids = gold_cluster_ids[gold_mention_mask]
             cand_cluster_ids[filtered_gold_starts, filtered_gold_end_offsets] = filtered_gold_cluster_ids
 
         # [num_words * max_span_width]
-        candidate_ends = (candidate_starts + torch.arange(config['max_span_width']).view(1, -1)).view(-1)
+        candidate_ends = (candidate_starts + torch.arange(self.config['max_span_width']).view(1, -1)).view(-1)
 
         sentence_indices = example['sentence_map']
         # remove cands with cand_ends >= num_words
@@ -265,7 +269,7 @@ def gen_batches(name):
         cand_mention_labels = cand_mention_labels.cuda()
         yield pct, example_idx, tensors, cand_mention_labels
 
-        if config['debugging']:
+        if self.config['debugging']:
             break
 
         # torch.cuda.empty_cache()
@@ -300,8 +304,8 @@ def get_doc_stats():
         max_sent_len = 0
 
         for example in datasets[name].examples:
-            if name == 'train' and len(example['sentences']) > config['max_sent_num']:
-                example = Dataset.truncate_example(example)
+            if name == 'train' and len(example['sentences']) > datasets[name].config['max_sent_num']:
+                example = Dataset.truncate_example(example, datasets[name].config['max_sent_num'])
 
             max_num_words = max(max_num_words, sum(len(sent) for sent in example['sentences']))
             max_sent_len = max(max_sent_len, max(len(sent) for sent in example['sentences']))

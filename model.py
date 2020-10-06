@@ -5,6 +5,7 @@ from functools import cmp_to_key
 import time
 import torch
 from torch import nn
+from transformers import AutoModel
 
 
 class Model(nn.Module):
@@ -13,7 +14,7 @@ class Model(nn.Module):
 
         self.config = config
 
-        self.encoder = BertModel.from_pretrained('bert-base-cased')
+        self.encoder = AutoModel.from_pretrained('bert-base-cased', cache_dir=self.config['bert_cache_dir'])
 
         self.span_width_embedder = nn.Embedding(
             num_embeddings=self.config['max_span_width'],
