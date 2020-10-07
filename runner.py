@@ -5,12 +5,12 @@ import re
 import subprocess
 from itertools import chain
 from torch import nn, optim
+import torch.utils.data as tud
 import argparse
 
 from model import Model
 from util import initialize_from_env, set_log_file
 from log import log
-import data_utils
 from data_utils import PrpDataset
 from model_utils import OptimizerBase
 import metrics
@@ -165,8 +165,8 @@ class Runner:
                predicted_clusters, span_to_predicted_cluster
 
 
-    def test_gpu(self):
-        example_idx, input_tensors = data_utils.datasets['train'][0]
+    def test_gpu(self, dataset):
+        example_idx, input_tensors = dataset[0]
         loss = self.model.compute_loss(input_tensors)
         print(loss.item())
         self.optimizer.zero_grad()
@@ -175,7 +175,7 @@ class Runner:
         self.optimizer.step()
 
 
-    def train(self):
+    def train(self, data_loaders):
         if os.path.exists(self.config['log_dir']) or self.config['loads_ckpt'] or self.config['loads_best_ckpt']:
             self.load_ckpt()
 
@@ -198,9 +198,11 @@ class Runner:
             next_evaluating_pct = self.config["next_evaluating_pct"] 
             start_time = time.time()
 
-            for pct, example_idx, input_tensors, cand_mention_labels in data_utils.gen_batches(
-                'train' if self.config['training'] else 'test'):
+            for example_idx, input_tensors, cand_mention_labels in data_loaders['train']:
+                input_tensors = [t.cuda() for t in input_tensors]
+                cand_mention_labels = cand_mention_labels.cuda()
                 batch_num += 1
+                pct = batch_num / len(data_loaders['train'])
 
                 self.optimizer.zero_grad()
 
@@ -273,7 +275,7 @@ class Runner:
 
                 if pct >= next_evaluating_pct:
                     iter_now = int(len(PrpDataset) * (epoch_idx + pct))
-                    avg_f1 = self.evaluate(iter_now)
+                    avg_f1 = self.evaluate(data_loaders['val'], iter_now)
 
                     if avg_f1 > self.max_f1:
                         self.max_f1 = avg_f1
@@ -293,7 +295,7 @@ class Runner:
 
 
             iter_now = int(len(PrpDataset) * (epoch_idx + pct))
-            avg_f1 = self.evaluate(iter_now)
+            avg_f1 = self.evaluate(data_loaders['val'], iter_now)
             ckpt_path = self.save_ckpt()
 
             if self.config["max_ckpt_to_keep"] > 0:
@@ -314,7 +316,7 @@ class Runner:
                 break
 
 
-    def evaluate(self, iter_now=0, name='test', saves_results=False):
+    def evaluate(self, data_loader, iter_now=0, name='test', saves_results=False):
         # from collections import Counter
         # span_len_cnts = Counter()
 
@@ -330,8 +332,11 @@ class Runner:
             start_time = time.time()
             cluster_predictions = {}
 
-            for pct, example_idx, input_tensors, cand_mention_labels in data_utils.gen_batches(name):
+            for example_idx, input_tensors, cand_mention_labels in data_loader:
+                input_tensors = [t.cuda() for t in input_tensors]
+                cand_mention_labels = cand_mention_labels.cuda()
                 batch_num += 1
+                pct = batch_num / len(data_loader)
 
                 (
                     # [cand_num]
@@ -410,7 +415,7 @@ class Runner:
                     top_ant_mask_of_spans
                 )
 
-                gold_clusters = data_utils.get_gold_clusters(name, example_idx)
+                gold_clusters = data_loader.get_gold_clusters(example_idx)
                 gold_clusters = [
                     tuple(tuple(span) for span in cluster)
                     for cluster in gold_clusters
@@ -427,10 +432,10 @@ class Runner:
                     mention_to_predicted=span_to_predicted_cluster,
                     mention_to_gold=span_to_gold_cluster
                 )
-                cluster_predictions[data_utils.get_doc_key(name, example_idx)] = predicted_clusters
+                cluster_predictions[data_loader.get_doc_key(example_idx)] = predicted_clusters
 
-                pr_coref_evaluator.update(predicted_clusters, data_utils.get_pronoun_info(name, example_idx), 
-                                          data_utils.get_sentences(name, example_idx))
+                pr_coref_evaluator.update(predicted_clusters, data_loader.get_pronoun_info(example_idx), 
+                                          data_loader.get_sentences(example_idx))
 
                 if pct >= next_logging_pct:
                     print(
@@ -583,13 +588,13 @@ if __name__ == '__main__':
             batch_size=1,
             shuffle=(name == 'train'),
             # pin_memory=True,
-            collate_fn=collate,
+            collate_fn=PrpDataset.collate_fn,
             num_workers=4
         )
         for name in names
     }
 
     if config['training']:
-        runner.train()
+        runner.train(data_loaders)
     elif config['validating']:
-        runner.evaluate()
+        runner.evaluate(data_loaders[names[-1]])

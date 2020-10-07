@@ -219,60 +219,33 @@ class PrpDataset(tud.Dataset):
             cand_mention_labels
         )
 
+    @staticmethod
+    def collate_fn(batch):
+        # batch_size = 1
+        # batch, = batch
+        # breakpoint()
 
-def get_dataset_size(name):
-    return len(datasets[name])
+        # return batch
+        (example_idx, *tensors, cand_mention_labels), = batch
+        # breakpoint()
 
+        # assert tensors[2].dtype == np.float32
 
-def get_doc_key(name, example_idx):
-    return datasets[name].get_doc_key(example_idx)
+        # print(torch.as_tensor(tensors[2]).cuda().type())
 
+        return (
+            example_idx,
+            tensors,
+            cand_mention_labels
+            # tuple(
+            #     # map(
+            #     #     lambda tensor: torch.as_tensor(tensor).cuda(),
+            #     #     # lambda tensor: tensor.cuda(),
+            #     #     tensors
+            #     # )
+            # )
+        )
 
-def get_gold_clusters(name, example_idx):
-    return datasets[name].get_gold_clusters(example_idx)
-
-
-def collate(batch):
-    # batch_size = 1
-    # batch, = batch
-    # breakpoint()
-
-    # return batch
-    (example_idx, *tensors, cand_mention_labels), = batch
-    # breakpoint()
-
-    # assert tensors[2].dtype == np.float32
-
-    # print(torch.as_tensor(tensors[2]).cuda().type())
-
-    return (
-        example_idx,
-        tensors,
-        cand_mention_labels
-        # tuple(
-        #     # map(
-        #     #     lambda tensor: torch.as_tensor(tensor).cuda(),
-        #     #     # lambda tensor: tensor.cuda(),
-        #     #     tensors
-        #     # )
-        # )
-    )
-
-
-def gen_batches(name):
-    instance_num = 0
-
-    for example_idx, tensors, cand_mention_labels in data_loaders[name]:
-        instance_num += 1
-        pct = instance_num * 100. / len(datasets[name])
-        tensors = (t.cuda() for t in tensor)
-        cand_mention_labels = cand_mention_labels.cuda()
-        yield pct, example_idx, tensors, cand_mention_labels
-
-        if self.config['debugging']:
-            break
-
-        # torch.cuda.empty_cache()
 
 
 def save_predictions(name, predictions):
