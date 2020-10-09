@@ -73,6 +73,9 @@ def set_gpus(*gpus):
     print("Setting CUDA_VISIBLE_DEVICES to: {}".format(os.environ["CUDA_VISIBLE_DEVICES"]))
 
 
+def flatten(l):
+  return [item for sublist in l for item in sublist]
+
 def mkdirs(path):
     try:
         os.makedirs(path)

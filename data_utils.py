@@ -9,10 +9,15 @@ import json
 import csv
 import bisect
 # from PIL import Image
+import numpy as np
+import random
 import pdb
 import h5py
+import torch
 import torch.utils.data as tud
 from transformers import AutoTokenizer
+
+import util
 
 
 # names = 'test', 'dev'
@@ -96,8 +101,6 @@ class PrpDataset(tud.Dataset):
         if self.name == 'train' and len(example['sentences']) > self.config['max_sent_num']:
             raise ValueError(f'example {example_idx} needs truncation')
             example = Dataset.truncate_example(example, self.config['max_sent_num'])
-
-        sents = example['sentences']
 
         sentences = example["sentences"]
         num_words = sum(len(s) for s in sentences)
@@ -281,4 +284,5 @@ def get_doc_stats(datasets, names):
 
 
 if __name__ == '__main__':
+    # TODO: check data_utils code by importing data
     get_doc_stats()
