@@ -1,7 +1,6 @@
 import os
-
+import math
 from tqdm import tqdm
-from model_utils import *
 from collections import defaultdict, Counter
 from itertools import chain
 import time
@@ -12,15 +11,8 @@ import bisect
 # from PIL import Image
 import pdb
 import h5py
-
 import torch.utils.data as tud
-
 from transformers import AutoTokenizer
-
-
-id_to_genre = ('bc', 'bn', 'mz', 'nw', 'pt', 'tc', 'wb')
-genre_to_id = {genre: id_ for id_, genre in enumerate(id_to_genre)}
-genre_num = len(id_to_genre)
 
 
 # names = 'test', 'dev'
@@ -41,6 +33,7 @@ class PrpDataset(tud.Dataset):
     def __init__(self, name, config):
         self.name = name
         self.config = config
+        self.genre_to_id = {genre: id_ for id_, genre in enumerate(self.config['id_to_genre'])}
         self.examples = json.load(open(self.config[f'{name}_path']))
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-cased", cache_dir=self.config['bert_cache_dir'])
 
@@ -134,7 +127,7 @@ class PrpDataset(tud.Dataset):
 
         doc_key = example['doc_key'].replace('/', ':')
 
-        genre_id = torch.as_tensor([genre_to_id[doc_key[:2]]])
+        genre_id = torch.as_tensor([self.genre_to_id[doc_key[:2]]])
 
         clusters = example['clusters']
 
@@ -271,14 +264,14 @@ def save_predictions(name, predictions):
         )
 
 
-def get_doc_stats():
+def get_doc_stats(datasets, names):
     for name in names:
         max_num_words = 0
         max_sent_len = 0
 
         for example in datasets[name].examples:
             if name == 'train' and len(example['sentences']) > datasets[name].config['max_sent_num']:
-                example = Dataset.truncate_example(example, datasets[name].config['max_sent_num'])
+                example = PrpDataset.truncate_example(example, datasets[name].config['max_sent_num'])
 
             max_num_words = max(max_num_words, sum(len(sent) for sent in example['sentences']))
             max_sent_len = max(max_sent_len, max(len(sent) for sent in example['sentences']))

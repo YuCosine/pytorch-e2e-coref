@@ -1,3 +1,8 @@
+import numpy as np
+import math
+import random
+import functools
+
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
@@ -9,13 +14,10 @@ from torch.utils import data as tud
 from torchvision import models as vmodels
 from torchvision import transforms
 import torch.nn.utils.rnn as rnn_utils
+
 from allennlp.modules.elmo import Elmo, batch_to_ids
 import allennlp.models.coreference_resolution.coref
 
-import numpy as np
-import math
-import random
-import configs
 
 # from scipy.optimize import brentq
 # from scipy.interpolate import interp1d
@@ -115,7 +117,7 @@ def build_torch_optimizer(model, config):
     return optimizer
 
 
-def make_learning_rate_decay_fn():
+def make_learning_rate_decay_fn(config):
     """Returns the learning decay function from options."""
     return functools.partial(
         linear_decay,
@@ -245,15 +247,15 @@ class OptimizerBase(object):
                 # Reset options, keep optimizer.
                 optim_state_dict = ckpt_state_dict
 
-        learning_rates = [optim_config["task_learning_rate"], 
-            optim_config["bert_learning_rate"]]
+        learning_rates = [optim_opt["task_learning_rate"], 
+            optim_opt["bert_learning_rate"]]
         decay_fn = [make_learning_rate_decay_fn(optim_opt), 
             make_learning_rate_decay_fn(optim_opt)]
         optimizer = cls(
             build_torch_optimizer(model, optim_opt),
             learning_rates,
             learning_rate_decay_fn=decay_fn,
-            max_grad_norm=optim_config["max_grad_norm"])
+            max_grad_norm=optim_opt["max_grad_norm"])
         if optim_state_dict:
             optimizer.load_state_dict(optim_state_dict)
         return optimizer
@@ -357,10 +359,10 @@ class AdamWeightDecay(Optimizer):
         self.exclude_from_weight_decay = exclude_from_weight_decay
         defaults = dict(lr=lr, betas=betas, eps=eps,
                         weight_decay=weight_decay, amsgrad=amsgrad)
-        super(Adam, self).__init__(params, defaults)
+        super(AdamWeightDecay, self).__init__(params, defaults)
 
     def __setstate__(self, state):
-        super(Adam, self).__setstate__(state)
+        super(AdamWeightDecay, self).__setstate__(state)
         for group in self.param_groups:
             group.setdefault('amsgrad', False)
 

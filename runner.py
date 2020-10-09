@@ -1,16 +1,20 @@
 import os
+import sys
 from collections import deque
 import time
 import re
+import shutil
 import subprocess
+import numpy as np
+import random
 from itertools import chain
+import torch
 from torch import nn, optim
 import torch.utils.data as tud
 import argparse
 
 from model import Model
-from util import initialize_from_env, set_log_file
-from log import log
+from util import initialize_from_env, set_log_file, TensorboardWriter
 from data_utils import PrpDataset
 from model_utils import OptimizerBase
 import metrics
@@ -30,7 +34,7 @@ class Runner:
         self.config = config
         self.model = Model(config).cuda()
 
-        self.optimizer = OptimizerBase.from_opt(model, self.config)
+        self.optimizer = OptimizerBase.from_opt(self.model, self.config)
 
         self.epoch_idx = 0
         self.max_f1 = 0.
@@ -270,7 +274,7 @@ class Runner:
                     next_logging_pct += self.config["next_logging_pct"]
 
                     iter_now = int(len(PrpDataset) * (epoch_idx + pct))
-                    self.writer.add_scalar('Train/loss', avg_loss, iter_now)
+                    self.writer.add_scalar('Train/loss', avg_epoch_loss / batch_num, iter_now)
 
 
                 if pct >= next_evaluating_pct:
@@ -410,7 +414,7 @@ class Runner:
                     # # [top_cand_num, 1 + pruned_ant_num]
                     # top_ant_scores_of_spans,
                     # 4 * [top_cand_num, 1 + pruned_ant_num]
-                    list_of_top_ant_scores_of_spans,
+                    # list_of_top_ant_scores_of_spans,
                     # [top_span_num, pruned_ant_num]
                     top_ant_mask_of_spans
                 )
@@ -539,7 +543,8 @@ class Runner:
                 if len(ckpt_path) == 0:
                     print(f'No .ckpt found in {self.config["log_dir"]}')
                     return
-                ckpt_path = f'{self.config["log_dir"]}/{sorted(ckpt_paths, key=lambda x:int(re.search(r'(\d+)', x).groups(0)))}'
+                sort_func = lambda x:int(re.search(r"(\d+)", x).groups(0))
+                ckpt_path = f'{self.config["log_dir"]}/{sorted(ckpt_paths, key=sort_func)}'
 
         print(f'loading checkpoint {ckpt_path}')
 
@@ -553,20 +558,20 @@ if __name__ == '__main__':
     else:
         sys.argv[1] = args.model  
 
-    # set log file
-    config["log_dir"] = os.path.join(args.log_dir, args.model)
-    if not os.path.exists(config["log_dir"]):
-      os.makedirs(config["log_dir"])
-    
-    log_file = os.path.join(config["log_dir"], f'{args.mode}.log')
-    set_log_file(log_file)
-
     # initialization
     config = initialize_from_env()
     torch.manual_seed(config['random_seed'])
     torch.cuda.manual_seed(config['random_seed'])
     random.seed(config['random_seed'])
     np.random.seed(config['random_seed'])
+
+    # set log file
+    config["log_dir"] = os.path.join(args.log_dir, args.model)
+    if not os.path.exists(config["log_dir"]):
+      os.makedirs(config["log_dir"])
+    
+    log_file = os.path.join(config["log_dir"], f'{args.mode}.log')
+    set_log_file(log_file)    
 
     runner = Runner(config)
 

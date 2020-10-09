@@ -148,6 +148,24 @@ def lea(clusters, mention_to_gold):
     return num, dem
 
 
+def verify_correct_NP_match(predicted_NP, gold_NPs, model, matched_gold_ids):
+    if model == 'exact':
+        for gold_id, tmp_gold_NP in enumerate(gold_NPs):
+            if gold_id in matched_gold_ids:
+                continue
+            if tmp_gold_NP[0] == predicted_NP[0] and tmp_gold_NP[1] == predicted_NP[1]:
+                return gold_id
+    elif model == 'cover':
+        for gold_id, tmp_gold_NP in enumerate(gold_NPs):
+            if gold_id in matched_gold_ids:
+                continue
+            if tmp_gold_NP[0] <= predicted_NP[0] and tmp_gold_NP[1] >= predicted_NP[1]:
+                return gold_id
+            if tmp_gold_NP[0] >= predicted_NP[0] and tmp_gold_NP[1] <= predicted_NP[1]:
+                return gold_id
+    return None
+    
+
 class PrCorefEvaluator(object):
     def __init__(self):
         self.all_coreference = 0

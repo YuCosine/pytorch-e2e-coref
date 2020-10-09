@@ -3,8 +3,10 @@ from modules import Squeezer
 import data_utils
 from functools import cmp_to_key
 import time
+
 import torch
 from torch import nn
+import torch.nn.functional as F
 from transformers import AutoModel
 
 
@@ -67,7 +69,7 @@ class Model(nn.Module):
         )
 
         self.genre_embedder = nn.Embedding(
-            num_embeddings=data_utils.genre_num,
+            num_embeddings=len(self.config['id_to_genre']),
             embedding_dim=self.config['feature_size']
         )
 

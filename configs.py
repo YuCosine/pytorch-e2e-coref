@@ -1,6 +1,5 @@
 import datetime
 import argparse as ap
-from model_utils import *
 import time
 import random
 import os
