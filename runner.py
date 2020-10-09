@@ -540,7 +540,7 @@ class Runner:
                 ckpt_path = f'{self.config["log_dir"]}/best.ckpt'
             else:
                 ckpt_paths = [path for path in os.listdir(f'{self.config["log_dir"]}/') if path.endswith('.ckpt')]
-                if len(ckpt_path) == 0:
+                if len(ckpt_paths) == 0:
                     print(f'No .ckpt found in {self.config["log_dir"]}')
                     return
                 sort_func = lambda x:int(re.search(r"(\d+)", x).groups(0))
@@ -573,8 +573,6 @@ if __name__ == '__main__':
     log_file = os.path.join(config["log_dir"], f'{args.mode}.log')
     set_log_file(log_file)    
 
-    runner = Runner(config)
-
     config['training'] = args.mode == 'train'
     config['validating'] = args.mode == 'eval'
 
@@ -598,6 +596,10 @@ if __name__ == '__main__':
         )
         for name in names
     }
+    config['train_steps'] = len(datasets[names[0]]) * config['num_epochs']
+    config['warmup_steps'] = config['train_steps'] * 0.1
+
+    runner = Runner(config)
 
     if config['training']:
         runner.train(data_loaders)

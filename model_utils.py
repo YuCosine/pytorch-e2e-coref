@@ -29,17 +29,18 @@ import allennlp.models.coreference_resolution.coref
 
 
 def init_params(module):
+
     if isinstance(module, nn.Linear):
         nn.init.kaiming_normal_(module.weight.data)
 
         if module.bias is not None:
             nn.init.normal_(module.bias.data)
 
-        print('initialized Linear')
+        # print('initialized Linear')
 
     elif isinstance(module, nn.Conv2d) or isinstance(module, nn.Conv1d):
         nn.init.kaiming_normal_(module.weight, mode='fan_out')
-        print('initialized Conv')
+        # print('initialized Conv')
 
     elif isinstance(module, nn.RNNBase) or isinstance(module, nn.LSTMCell) or isinstance(module, nn.GRUCell):
         for name, param in module.named_parameters():
@@ -48,11 +49,11 @@ def init_params(module):
             elif 'bias' in name:
                 nn.init.normal_(param.data)
 
-        print('initialized LSTM')
+        # print('initialized LSTM')
 
     elif isinstance(module, nn.BatchNorm1d) or isinstance(module, nn.BatchNorm2d):
         module.weight.data.normal_(1.0, 0.02)
-        print('initialized BatchNorm')
+        # print('initialized BatchNorm')
 
 
 def build_len_mask_batch(
@@ -105,7 +106,7 @@ def build_torch_optimizer(model, config):
     optimizer = MultipleOptimizer(
         [optim.Adam(
             params['task'],
-            lr=config["learning_rate"],
+            lr=config["learning_rate_task"],
             betas=betas,
             eps=1e-6),
          AdamWeightDecay(
@@ -220,7 +221,7 @@ class OptimizerBase(object):
         optim_opt = config
         optim_state_dict = None
 
-        if config["train_from"] and checkpoint is not None:
+        if config["loads_ckpt"] and checkpoint is not None:
             optim = checkpoint['optim']
             ckpt_opt = checkpoint['opt']
             ckpt_state_dict = {}
@@ -247,8 +248,8 @@ class OptimizerBase(object):
                 # Reset options, keep optimizer.
                 optim_state_dict = ckpt_state_dict
 
-        learning_rates = [optim_opt["task_learning_rate"], 
-            optim_opt["bert_learning_rate"]]
+        learning_rates = [optim_opt["learning_rate_task"], 
+            optim_opt["learning_rate_bert"]]
         decay_fn = [make_learning_rate_decay_fn(optim_opt), 
             make_learning_rate_decay_fn(optim_opt)]
         optimizer = cls(

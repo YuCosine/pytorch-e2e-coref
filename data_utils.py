@@ -34,8 +34,8 @@ class PrpDataset(tud.Dataset):
         self.name = name
         self.config = config
         self.genre_to_id = {genre: id_ for id_, genre in enumerate(self.config['id_to_genre'])}
-        self.examples = json.load(open(self.config[f'{name}_path']))
-        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-cased", cache_dir=self.config['bert_cache_dir'])
+        self.examples = [json.loads(line) for line in open(self.config[f'{name}_path'])]
+        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", cache_dir=self.config['bert_cache_dir'])
 
     def __len__(self):
         return len(self.examples)
@@ -110,6 +110,7 @@ class PrpDataset(tud.Dataset):
         input_ids, input_mask, speaker_ids = [], [], []
         for i, (sentence, speaker) in enumerate(zip(sentences, speakers)):
             # sent_input_ids = self.tokenizer.encode(sentence, add_special_tokens=False)
+            sentence = [word.lower() for word in sentence]
             sent_input_ids = self.tokenizer.convert_tokens_to_ids(sentence)
             sent_len = len(sent_input_ids)
             sent_input_mask = [1] * sent_len

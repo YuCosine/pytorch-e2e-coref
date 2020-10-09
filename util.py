@@ -32,7 +32,9 @@ def initialize_from_env(eval_test=False):
         config = pyhocon.ConfigFactory.parse_file("test.experiments.conf")[name]
     else:
         config = pyhocon.ConfigFactory.parse_file("experiments.conf")[name]
-        config["log_dir"] = os.makedirs(os.path.join(config["log_root"], name))
+        config["log_dir"] = os.path.join(config["log_dir"], name)
+        if not os.path.exists(config["log_dir"]):
+            os.makedirs(config["log_dir"])
 
     config['timestamp'] = datetime.datetime.now().strftime('%m%d-%H%M%S')
 
