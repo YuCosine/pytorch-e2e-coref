@@ -14,6 +14,8 @@ parser.add_argument('--max_seg_len', type=int, default=512,
                     help='max segment len')
 parser.add_argument('--model', type=str, default='bert',
                     help='model to use: bert or roberta')
+parser.add_argument('--cased', action='store_true',
+                    help='save cased letters')
 
 def get_sentence_map(segments, sentence_end):
   current = 0
@@ -40,8 +42,12 @@ if __name__ == '__main__':
 
   if args.model == 'bert':
     from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", 
-                                              cache_dir=cache_dir)
+    if args.cased:
+      tokenizer = AutoTokenizer.from_pretrained("bert-base-cased", 
+                                                cache_dir=cache_dir)
+    else:
+      tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", 
+                                                cache_dir=cache_dir)
   else:
     raise ValueError(f'undefined model {args.model}')
   if args.dataset == 'vispro':
@@ -91,6 +97,8 @@ if __name__ == '__main__':
       output_filename = input_filename.replace('.jsonlines', f'.{args.model}.{args.max_seg_len}.jsonlines').replace('vispro', 'vispro.pool')
     else:
       output_filename = input_filename.replace('.jsonlines', f'.{args.model}.jsonlines')
+    if args.cased:
+      output_filename = output_filename.replace('.jsonlines', '.cased.jsonlines')
     output_file = open(output_filename, 'w')
 
     for dialog in tqdm(data):

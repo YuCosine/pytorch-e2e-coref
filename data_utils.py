@@ -113,7 +113,6 @@ class PrpDataset(tud.Dataset):
         input_ids, input_mask, speaker_ids = [], [], []
         for i, (sentence, speaker) in enumerate(zip(sentences, speakers)):
             # sent_input_ids = self.tokenizer.encode(sentence, add_special_tokens=False)
-            sentence = [word.lower() for word in sentence]
             sent_input_ids = self.tokenizer.convert_tokens_to_ids(sentence)
             sent_len = len(sent_input_ids)
             sent_input_mask = [1] * sent_len
@@ -281,6 +280,9 @@ def get_doc_stats(datasets, names):
             max_sent_len = max(max_sent_len, max(len(sent) for sent in example['sentences']))
 
         print(f'{name}: max_num_words = {max_num_words}, max_sent_len = {max_sent_len}')
+
+        # debug
+        d0 = datasets[name][0]
 
 
 if __name__ == '__main__':

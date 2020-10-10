@@ -105,8 +105,6 @@ class Model(nn.Module):
 
     def init_params(self):
         for name, module in self.named_children():
-            print(name)
-            print(module)
             if 'encoder' not in name:
                 module.apply(init_params)
 

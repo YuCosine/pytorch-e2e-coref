@@ -203,7 +203,8 @@ class Runner:
             start_time = time.time()
 
             for example_idx, input_tensors, cand_mention_labels in data_loaders['train']:
-                input_tensors = [t.cuda() if isinstance(t, torch.Tensor) else t for t in input_tensors]
+                input_tensors = [t.cuda() if len(t.size()) > 1 else t for t in input_tensors]
+                cand_mention_labels = cand_mention_labels.cuda()
                 batch_num += 1
                 pct = batch_num / len(data_loaders['train'])
 
@@ -336,7 +337,7 @@ class Runner:
             cluster_predictions = {}
 
             for example_idx, input_tensors, cand_mention_labels in data_loader:
-                input_tensors = [t.cuda() if isinstance(t, torch.Tensor) else t for t in input_tensors]
+                input_tensors = [t.cuda() if len(t.size()) > 1 else t for t in input_tensors]
                 cand_mention_labels = cand_mention_labels.cuda()
                 batch_num += 1
                 pct = batch_num / len(data_loader)
@@ -556,6 +557,10 @@ if __name__ == '__main__':
         sys.argv.append(args.model)
     else:
         sys.argv[1] = args.model  
+    if len(sys.argv) == 2:
+        sys.argv.append(args.mode)
+    else:
+        sys.argv[2] = args.mode  
 
     # initialization
     config = initialize_from_env()
@@ -574,12 +579,15 @@ if __name__ == '__main__':
 
     config['training'] = args.mode == 'train'
     config['validating'] = args.mode == 'eval'
+    config['debugging'] = args.mode == 'debug'
 
     # prepare dataset
     if config['training']:
         names = ('train', 'val')
     elif config['validating']: 
         names = ('test',) 
+    elif config['debugging']:
+        names = ('val', 'test')
     datasets = {
         name: PrpDataset(name, config)
         for name in names

@@ -29,6 +29,10 @@ def initialize_from_env(eval_test=False):
         name = sys.argv[1]
     else:
         name = 'debug'
+    if len(sys.argv) >= 3:
+        name = sys.argv[2]
+    else:
+        name = 'debug'
     print("Running experiment: {}".format(name))
 
     if eval_test:
