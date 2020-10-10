@@ -284,7 +284,6 @@ def get_doc_stats(datasets, names):
 
 
 if __name__ == '__main__':
-    # TODO: check data_utils code by importing data
     config = util.initialize_from_env()
     names = ('val',)
     datasets = {
