@@ -25,14 +25,19 @@ def initialize_from_env(eval_test=False):
     if "GPU" in os.environ:
         set_gpus(int(os.environ["GPU"]))
 
-    name = sys.argv[1]
+    if len(sys.argv) >= 2:
+        name = sys.argv[1]
+    else:
+        name = 'debug'
     print("Running experiment: {}".format(name))
 
     if eval_test:
         config = pyhocon.ConfigFactory.parse_file("test.experiments.conf")[name]
     else:
         config = pyhocon.ConfigFactory.parse_file("experiments.conf")[name]
-        config["log_dir"] = os.makedirs(os.path.join(config["log_root"], name))
+        config["log_dir"] = os.path.join(config["log_dir"], name)
+        if not os.path.exists(config["log_dir"]):
+            os.makedirs(config["log_dir"])
 
     config['timestamp'] = datetime.datetime.now().strftime('%m%d-%H%M%S')
 
@@ -70,6 +75,9 @@ def set_gpus(*gpus):
     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in gpus)
     print("Setting CUDA_VISIBLE_DEVICES to: {}".format(os.environ["CUDA_VISIBLE_DEVICES"]))
 
+
+def flatten(l):
+  return [item for sublist in l for item in sublist]
 
 def mkdirs(path):
     try:

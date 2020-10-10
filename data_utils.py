@@ -9,10 +9,15 @@ import json
 import csv
 import bisect
 # from PIL import Image
+import numpy as np
+import random
 import pdb
 import h5py
+import torch
 import torch.utils.data as tud
 from transformers import AutoTokenizer
+
+import util
 
 
 # names = 'test', 'dev'
@@ -34,8 +39,8 @@ class PrpDataset(tud.Dataset):
         self.name = name
         self.config = config
         self.genre_to_id = {genre: id_ for id_, genre in enumerate(self.config['id_to_genre'])}
-        self.examples = json.load(open(self.config[f'{name}_path']))
-        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-cased", cache_dir=self.config['bert_cache_dir'])
+        self.examples = [json.loads(line) for line in open(self.config[f'{name}_path'])]
+        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", cache_dir=self.config['bert_cache_dir'])
 
     def __len__(self):
         return len(self.examples)
@@ -97,8 +102,6 @@ class PrpDataset(tud.Dataset):
             raise ValueError(f'example {example_idx} needs truncation')
             example = Dataset.truncate_example(example, self.config['max_sent_num'])
 
-        sents = example['sentences']
-
         sentences = example["sentences"]
         num_words = sum(len(s) for s in sentences)
         speakers = example["speakers"]
@@ -110,6 +113,7 @@ class PrpDataset(tud.Dataset):
         input_ids, input_mask, speaker_ids = [], [], []
         for i, (sentence, speaker) in enumerate(zip(sentences, speakers)):
             # sent_input_ids = self.tokenizer.encode(sentence, add_special_tokens=False)
+            sentence = [word.lower() for word in sentence]
             sent_input_ids = self.tokenizer.convert_tokens_to_ids(sentence)
             sent_len = len(sent_input_ids)
             sent_input_mask = [1] * sent_len
@@ -170,7 +174,7 @@ class PrpDataset(tud.Dataset):
         # [num_words * max_span_width]
         candidate_ends = (candidate_starts + torch.arange(self.config['max_span_width']).view(1, -1)).view(-1)
 
-        sentence_indices = example['sentence_map']
+        sentence_indices = torch.tensor(example['sentence_map'])
         # remove cands with cand_ends >= num_words
         # [num_words * max_span_width]
         candidate_starts = candidate_starts.view(-1)
@@ -280,4 +284,11 @@ def get_doc_stats(datasets, names):
 
 
 if __name__ == '__main__':
-    get_doc_stats()
+    # TODO: check data_utils code by importing data
+    config = util.initialize_from_env()
+    names = ('val',)
+    datasets = {
+        name: PrpDataset(name, config)
+        for name in names
+    }
+    get_doc_stats(datasets, names)

@@ -16,26 +16,26 @@ class Model(nn.Module):
 
         self.config = config
 
-        self.encoder = AutoModel.from_pretrained('bert-base-cased', cache_dir=self.config['bert_cache_dir'])
+        self.encoder = AutoModel.from_pretrained('bert-base-uncased', cache_dir=self.config['bert_cache_dir'])
 
         self.span_width_embedder = nn.Embedding(
             num_embeddings=self.config['max_span_width'],
             embedding_dim=self.config['feature_size']
         )
         self.head_scorer = nn.Sequential(
-            nn.Linear(self.config['rnn_hidden_size'], 1),
+            nn.Linear(self.config['span_embedding_dim'], 1),
             Squeezer(dim=-1)
         )
 
         span_embedding_dim = self.config['span_embedding_dim'] * 3 + self.config['feature_size']
         self.mention_scorer = nn.Sequential(
-            nn.Linear(span_embedding_dim, self.config['ffnn_hidden_size']),
+            nn.Linear(span_embedding_dim, self.config['ffnn_size']),
             nn.ReLU(),
             nn.Dropout(self.config['dropout_prob']),
-            nn.Linear(self.config['ffnn_hidden_size'], self.config['ffnn_hidden_size']),
+            nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
             nn.ReLU(),
             nn.Dropout(self.config['dropout_prob']),
-            nn.Linear(self.config['ffnn_hidden_size'], 1),
+            nn.Linear(self.config['ffnn_size'], 1),
             Squeezer(dim=-1)
         )
 
@@ -44,13 +44,13 @@ class Model(nn.Module):
                 num_embeddings=self.config['max_span_width'],
                 embedding_dim=self.config['feature_size']
             ),
-            nn.Linear(self.config['feature_size'], self.config['ffnn_hidden_size']),
+            nn.Linear(self.config['feature_size'], self.config['ffnn_size']),
             nn.ReLU(),
             nn.Dropout(self.config['dropout_prob']),
-            nn.Linear(self.config['ffnn_hidden_size'], self.config['ffnn_hidden_size']),
+            nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
             nn.ReLU(),
             nn.Dropout(self.config['dropout_prob']),
-            nn.Linear(self.config['ffnn_hidden_size'], 1),
+            nn.Linear(self.config['ffnn_size'], 1),
             Squeezer(dim=-1)
         )
 
@@ -85,13 +85,13 @@ class Model(nn.Module):
 
         pair_embedding_dim = (span_embedding_dim + self.config['feature_size']) * 3
         self.slow_ant_scorer = nn.Sequential(
-            nn.Linear(pair_embedding_dim, self.config['ffnn_hidden_size']),
+            nn.Linear(pair_embedding_dim, self.config['ffnn_size']),
             nn.ReLU(),
             nn.Dropout(self.config['dropout_prob']),
-            nn.Linear(self.config['ffnn_hidden_size'], self.config['ffnn_hidden_size']),
+            nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
             nn.ReLU(),
             nn.Dropout(self.config['dropout_prob']),
-            nn.Linear(self.config['ffnn_hidden_size'], 1),
+            nn.Linear(self.config['ffnn_size'], 1),
             Squeezer(dim=-1)
         )
 
@@ -104,7 +104,11 @@ class Model(nn.Module):
 
 
     def init_params(self):
-        self.apply(init_params)
+        for name, module in self.named_children():
+            print(name)
+            print(module)
+            if 'encoder' not in name:
+                module.apply(init_params)
 
     def get_trainable_params(self):
         yield from filter(lambda param: param.requires_grad, self.parameters())

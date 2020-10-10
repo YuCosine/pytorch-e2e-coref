@@ -203,8 +203,7 @@ class Runner:
             start_time = time.time()
 
             for example_idx, input_tensors, cand_mention_labels in data_loaders['train']:
-                input_tensors = [t.cuda() for t in input_tensors]
-                cand_mention_labels = cand_mention_labels.cuda()
+                input_tensors = [t.cuda() if isinstance(t, torch.Tensor) else t for t in input_tensors]
                 batch_num += 1
                 pct = batch_num / len(data_loaders['train'])
 
@@ -337,7 +336,7 @@ class Runner:
             cluster_predictions = {}
 
             for example_idx, input_tensors, cand_mention_labels in data_loader:
-                input_tensors = [t.cuda() for t in input_tensors]
+                input_tensors = [t.cuda() if isinstance(t, torch.Tensor) else t for t in input_tensors]
                 cand_mention_labels = cand_mention_labels.cuda()
                 batch_num += 1
                 pct = batch_num / len(data_loader)
@@ -540,7 +539,7 @@ class Runner:
                 ckpt_path = f'{self.config["log_dir"]}/best.ckpt'
             else:
                 ckpt_paths = [path for path in os.listdir(f'{self.config["log_dir"]}/') if path.endswith('.ckpt')]
-                if len(ckpt_path) == 0:
+                if len(ckpt_paths) == 0:
                     print(f'No .ckpt found in {self.config["log_dir"]}')
                     return
                 sort_func = lambda x:int(re.search(r"(\d+)", x).groups(0))
@@ -573,8 +572,6 @@ if __name__ == '__main__':
     log_file = os.path.join(config["log_dir"], f'{args.mode}.log')
     set_log_file(log_file)    
 
-    runner = Runner(config)
-
     config['training'] = args.mode == 'train'
     config['validating'] = args.mode == 'eval'
 
@@ -598,6 +595,10 @@ if __name__ == '__main__':
         )
         for name in names
     }
+    config['train_steps'] = len(datasets[names[0]]) * config['num_epochs']
+    config['warmup_steps'] = config['train_steps'] * 0.1
+
+    runner = Runner(config)
 
     if config['training']:
         runner.train(data_loaders)
