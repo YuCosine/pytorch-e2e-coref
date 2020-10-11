@@ -1,6 +1,6 @@
 from model_utils import init_params, build_len_mask_batch
 from modules import Squeezer
-import data_utils
+import math
 from functools import cmp_to_key
 import time
 
@@ -18,9 +18,12 @@ class Model(nn.Module):
 
         self.encoder = AutoModel.from_pretrained('bert-base-uncased', cache_dir=self.config['bert_cache_dir'])
 
-        self.span_width_embedder = nn.Embedding(
-            num_embeddings=self.config['max_span_width'],
-            embedding_dim=self.config['feature_size']
+        self.span_width_embedder = nn.Sequential(
+            nn.Embedding(
+                num_embeddings=self.config['max_span_width'],
+                embedding_dim=self.config['feature_size']
+            ),
+            nn.Dropout(self.config['dropout_prob'])
         )
         self.head_scorer = nn.Sequential(
             nn.Linear(self.config['span_embedding_dim'], 1),
@@ -122,11 +125,10 @@ class Model(nn.Module):
         # [span_num]
         span_width_ids = span_widths - 1  # [k]
 
+        # [max_span_width, span_width_embedding_dim]
+        width_scores = self.span_width_embedder(torch.arange(self.config["max_span_width"], device=start_idxes.device))
         # [span_num, span_width_embedding_dim]
-        span_width_embeddings = F.dropout(
-            self.span_width_embedder(span_width_ids),
-            p=self.config['dropout_prob'], training=self.training
-        )
+        span_width_embeddings = width_scores[span_width_ids]
 
         # [span_num, max_span_width]
         idxes_of_spans = torch.clamp(
@@ -145,7 +147,7 @@ class Model(nn.Module):
         head_scores_of_spans = self.head_scores[idxes_of_spans]
 
         # [span_num, max_span_width]
-        span_masks = build_len_mask_batch(span_widths, self.config['max_span_width']).view(-1, self.config['max_span_width'])
+        span_masks = build_len_mask_batch(span_widths, self.config['max_span_width'])
         # [span_num, max_span_width]
         head_scores_of_spans.masked_fill_(~span_masks, -float('inf'))
         # [span_num, max_span_width, 1]
@@ -278,8 +280,8 @@ class Model(nn.Module):
         start_time = time.time()
 
         # [num_seg, num_words, hidden_size]
-        mention_doc = self.encoder(input_ids, attention_mask=input_mask)[0]
-        mention_doc = self.flatten_emb_by_sentence(mention_doc, input_mask)
+        mention_doc = self.encoder(input_ids, attention_mask=input_mask)[0] # [num_seg, num_words, emb]
+        mention_doc = self.flatten_emb_by_sentence(mention_doc, input_mask) # [num_words, emb]
 
         num_words = mention_doc.size(0)
 
@@ -288,6 +290,7 @@ class Model(nn.Module):
             mention_doc, mention_doc,
             candidate_starts, candidate_ends
         )
+        # TODO here
 
         # [cand_num]
         cand_mention_scores = self.get_mention_scores(candidate_span_emb, candidate_starts, candidate_ends)
@@ -543,7 +546,7 @@ class Model(nn.Module):
 
         # [top_span_num, top_span_num]
         antecedent_distance_buckets = self.bucket_distance(antecedent_offsets)
-        distance_scores = self.ant_distance_scorer(torch.arange(self.self.config["max_span_width"], device=top_span_embeddings.device).unsqueeze(1))
+        distance_scores = self.ant_distance_scorer(torch.arange(self.config["max_span_width"], device=top_span_embeddings.device).unsqueeze(1))
         antecedent_distance_scores = distance_scores[antecedent_distance_buckets]
         full_fast_ant_scores_of_spans += antecedent_distance_scores
 
@@ -613,7 +616,7 @@ class Model(nn.Module):
 
     def get_mention_scores(self, span_emb, span_starts, span_ends):
         span_scores = self.mention_scorer(span_emb)
-        width_scores = self.span_width_scorer(torch.arange(self.self.config["max_span_width"], device=span_starts.device).unsqueeze(1))
+        width_scores = self.span_width_scorer(torch.arange(self.config["max_span_width"], device=span_starts.device))
         span_width_index = span_ends - span_starts # [NC]
         width_scores = width_scores[span_width_index]
         span_scores += width_scores

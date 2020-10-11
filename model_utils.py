@@ -65,7 +65,7 @@ def build_len_mask_batch(
     # try:
     batch_size, = len_batch.shape
     # [batch_size, max_len]
-    idxes_batch = torch.arange(max_len).view(1, -1).repeat(batch_size, 1).to(len_batch.device)
+    idxes_batch = torch.arange(max_len, device=len_batch.device).view(1, -1).repeat(batch_size, 1)
     # [batch_size, max_len] = [batch_size, max_len] < [batch_size, 1]
     return idxes_batch < len_batch.view(-1, 1)
 

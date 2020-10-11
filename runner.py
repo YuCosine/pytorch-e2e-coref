@@ -203,7 +203,7 @@ class Runner:
             start_time = time.time()
 
             for example_idx, input_tensors, cand_mention_labels in data_loaders['train']:
-                input_tensors = [t.cuda() if len(t.size()) > 1 else t for t in input_tensors]
+                input_tensors = [t.cuda() for t in input_tensors]
                 cand_mention_labels = cand_mention_labels.cuda()
                 batch_num += 1
                 pct = batch_num / len(data_loaders['train'])
@@ -337,7 +337,7 @@ class Runner:
             cluster_predictions = {}
 
             for example_idx, input_tensors, cand_mention_labels in data_loader:
-                input_tensors = [t.cuda() if len(t.size()) > 1 else t for t in input_tensors]
+                input_tensors = [t.cuda() for t in input_tensors]
                 cand_mention_labels = cand_mention_labels.cuda()
                 batch_num += 1
                 pct = batch_num / len(data_loader)
@@ -583,32 +583,33 @@ if __name__ == '__main__':
 
     # prepare dataset
     if config['training']:
-        names = ('train', 'val')
+        splits = {'train': 'train', 'eval': 'val'}
     elif config['validating']: 
-        names = ('test',) 
+        splits = {'eval': 'test'}
     elif config['debugging']:
-        names = ('val', 'test')
+        splits = {'train': 'val', 'eval': 'test'}
     datasets = {
-        name: PrpDataset(name, config)
-        for name in names
+        split: PrpDataset(splits[split], config)
+        for split in splits
     }
     data_loaders = {
-        name: tud.DataLoader(
-            dataset=datasets[name],
+        split: tud.DataLoader(
+            dataset=datasets[split],
             batch_size=1,
-            shuffle=(name == 'train'),
+            shuffle=(split == 'train'),
             # pin_memory=True,
             collate_fn=PrpDataset.collate_fn,
             num_workers=4
         )
-        for name in names
+        for split in splits
     }
-    config['train_steps'] = len(datasets[names[0]]) * config['num_epochs']
-    config['warmup_steps'] = config['train_steps'] * 0.1
+    if not config['validating']:
+        config['train_steps'] = len(datasets['train']) * config['num_epochs']
+        config['warmup_steps'] = config['train_steps'] * 0.1
 
     runner = Runner(config)
 
-    if config['training']:
+    if config['training'] or config['debugging']:
         runner.train(data_loaders)
     elif config['validating']:
-        runner.evaluate(data_loaders[names[-1]])
+        runner.evaluate(data_loaders['eval'])

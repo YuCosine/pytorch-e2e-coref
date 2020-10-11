@@ -222,24 +222,13 @@ class PrpDataset(tud.Dataset):
         # breakpoint()
 
         # return batch
-        (example_idx, *tensors, cand_mention_labels), = batch
-        # breakpoint()
+        (example_idx, tensors, cand_mention_labels), = batch
 
-        # assert tensors[2].dtype == np.float32
-
-        # print(torch.as_tensor(tensors[2]).cuda().type())
 
         return (
             example_idx,
             tensors,
             cand_mention_labels
-            # tuple(
-            #     # map(
-            #     #     lambda tensor: torch.as_tensor(tensor).cuda(),
-            #     #     # lambda tensor: tensor.cuda(),
-            #     #     tensors
-            #     # )
-            # )
         )
 
 
