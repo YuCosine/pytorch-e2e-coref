@@ -73,22 +73,22 @@ class Runner:
         top_span_num = top_span_cluster_ids.size(0)
 
         # [top_cand_num, 1]
-        non_dummy_span_mask = (top_span_cluster_ids > 0).view(-1, 1)
+        non_dummy_indicator = (top_span_cluster_ids > 0).view(-1, 1)
 
         top_ant_cluster_ids_of_spans.masked_fill_(~top_ant_mask_of_spans, -float('inf'))
         # [top_cand_num, pruned_ant_num]
-        top_ant_indicators_of_spans = top_ant_cluster_ids_of_spans == top_span_cluster_ids.view(-1, 1)
+        same_cluster_indicator = top_ant_cluster_ids_of_spans == top_span_cluster_ids.view(-1, 1)
 
         # [top_cand_num, pruned_ant_num]
-        non_dummy_top_ant_indicators_of_spans = top_ant_indicators_of_spans & non_dummy_span_mask
+        pairwise_labels = same_cluster_indicator & non_dummy_indicator
 
         # [top_cand_num, 1 + pruned_ant_num]
-        top_ant_indicators_of_spans = torch.cat(
+        top_antecedent_labels = torch.cat(
             (
                 # [top_cand_num, 1]
-                ~non_dummy_top_ant_indicators_of_spans.any(dim=1, keepdim=True),
+                ~(pairwise_labels.any(dim=1, keepdim=True)),
                 # [top_cand_num, pruned_ant_num]
-                non_dummy_top_ant_indicators_of_spans
+                pairwise_labels
             ), dim=1
         )
 
