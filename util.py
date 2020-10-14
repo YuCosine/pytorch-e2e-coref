@@ -75,11 +75,6 @@ def copy_checkpoint(source, target):
         shutil.copyfile(source + ext, target + ext)
 
 
-def set_gpus(*gpus):
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in gpus)
-    print("Setting CUDA_VISIBLE_DEVICES to: {}".format(os.environ["CUDA_VISIBLE_DEVICES"]))
-
-
 def flatten(l):
   return [item for sublist in l for item in sublist]
 

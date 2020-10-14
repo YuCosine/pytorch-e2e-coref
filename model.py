@@ -65,7 +65,7 @@ class Model(nn.Module):
             ),
             nn.Dropout(self.config['dropout_prob']),
             nn.Linear(self.config['feature_size'], 1),
-            Squeezer(dim=-1)
+            Squeezer(dim=-1) # TODO here
         )        
 
         self.src_span_projector = nn.Linear(
@@ -297,7 +297,8 @@ class Model(nn.Module):
 
         top_cand_num = min(3900, int(num_words * self.config['top_span_ratio']))
 
-        # print('extracting top spans')
+        # debug
+        print('extracting top spans')
 
         # [top_cand_num]
         top_span_idxes = self.extract_top_spans(
@@ -309,6 +310,11 @@ class Model(nn.Module):
             candidate_ends,
             top_cand_num,
         )
+
+        # debug
+        print('top spans extracted')
+
+
         top_cand_num = top_span_idxes.size(0)
 
         top_start_idxes = candidate_starts[top_span_idxes]
@@ -322,15 +328,14 @@ class Model(nn.Module):
 
         # top_span_sent_idxes = cand_sent_idxes[top_span_idxes]
 
-        # try:
         # [top_cand_num]
+        speaker_ids = self.flatten_emb_by_sentence(speaker_ids, input_mask)
         top_span_speaker_ids = speaker_ids[top_start_idxes]
-        # except:
-        #     breakpoint()
 
         pruned_ant_num = min(self.config['max_top_antecedents'], top_cand_num)
 
-        # print('pruning ants')
+        # debug
+        print('pruning ants')
 
         (
             # [top_span_num, pruned_ant_num], [top_span_num, pruned_ant_num]
@@ -485,7 +490,7 @@ class Model(nn.Module):
         )
         # [top_span_num, pruned_ant_num, ant_offset_embedding_dim]
         ant_offset_embeddings_of_spans = self.ant_offset_embedder(
-            Model.get_offset_bucket_idxes_batch(top_ant_offsets_of_spans).to(top_span_embeddings.device)
+            self.get_offset_bucket_idxes_batch(top_ant_offsets_of_spans).to(top_span_embeddings.device)
         )
         feature_embeddings_of_spans = torch.cat(
             (
@@ -543,7 +548,7 @@ class Model(nn.Module):
         full_fast_ant_scores_of_spans += self.get_fast_ant_scores_of_spans(top_span_embeddings)
 
         # [top_span_num, top_span_num]
-        antecedent_distance_buckets = Model.get_offset_bucket_idxes_batch(antecedent_offsets).to(top_span_embeddings.device)
+        antecedent_distance_buckets = self.get_offset_bucket_idxes_batch(antecedent_offsets).to(top_span_embeddings.device)
         distance_scores = self.ant_distance_scorer(torch.arange(self.num_dist_buckets, device=top_span_embeddings.device).unsqueeze(1))
         antecedent_distance_scores = distance_scores[antecedent_distance_buckets]
         full_fast_ant_scores_of_spans += antecedent_distance_scores
@@ -604,9 +609,9 @@ class Model(nn.Module):
 
         emb_rank = len(emb.size())
         if emb_rank == 2:
-          flattened_emb = emb.reshape(num_sentences * max_sentence_length)
+            flattened_emb = emb.reshape(num_sentences * max_sentence_length)
         elif emb_rank == 3:
-          flattened_emb = emb.reshape(num_sentences * max_sentence_length, emb.size(2))
+            flattened_emb = emb.reshape(num_sentences * max_sentence_length, emb.size(2))
         else:
             raise ValueError("Unsupported rank: {}".format(emb_rank))
         return flattened_emb[text_len_mask.reshape(num_sentences * max_sentence_length)]
@@ -621,12 +626,13 @@ class Model(nn.Module):
         return span_scores
 
 
-    @staticmethod
-    def get_offset_bucket_idxes_batch(offsets_batch):
+    def get_offset_bucket_idxes_batch(self, offsets_batch):
         """
         [0, 1, 2, 3, 4, 5-7, 8-15, 16-31, 32-63, 64+].
         """
-        log_space_idxes_batch = (torch.log(offsets_batch.float()) / math.log(2)).floor().long() + 3
+        offsets_batch_for_log = offsets_batch.clone()
+        offsets_batch_for_log.masked_fill_(offsets_batch_for_log <= 1, 1)
+        log_space_idxes_batch = (torch.log(offsets_batch_for_log.float()) / math.log(2)).floor().long() + 3
 
         identity_mask_batch = (offsets_batch <= 4).long()
 

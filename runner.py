@@ -596,7 +596,7 @@ if __name__ == '__main__':
         split: tud.DataLoader(
             dataset=datasets[split],
             batch_size=1,
-            shuffle=(split == 'train'),
+            shuffle=(split == 'train' and config['training']),
             # pin_memory=True,
             collate_fn=PrpDataset.collate_fn,
             num_workers=4
