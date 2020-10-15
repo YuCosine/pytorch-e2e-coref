@@ -7,6 +7,7 @@ import time
 import torch
 from torch import nn
 import torch.nn.functional as F
+from transformers import AutoModel
 
 
 class Model(nn.Module):
@@ -16,7 +17,6 @@ class Model(nn.Module):
         self.config = config
         self.num_dist_buckets = 10
 
-        from transformers import AutoModel
         self.encoder = AutoModel.from_pretrained('bert-base-uncased', cache_dir=self.config['bert_cache_dir'])
 
         self.span_width_embedder = nn.Sequential(
@@ -298,7 +298,7 @@ class Model(nn.Module):
         top_cand_num = min(3900, int(num_words * self.config['top_span_ratio']))
 
         # debug
-        # print('extracting top spans')
+        print('extracting top spans')
 
         # [top_cand_num]
         top_span_idxes = self.extract_top_spans(
@@ -312,7 +312,7 @@ class Model(nn.Module):
         )
 
         # debug
-        # print('top spans extracted')
+        print('top spans extracted')
 
 
         top_cand_num = top_span_idxes.size(0)
@@ -335,7 +335,7 @@ class Model(nn.Module):
         pruned_ant_num = min(self.config['max_top_antecedents'], top_cand_num)
 
         # debug
-        # print('pruning ants')
+        print('pruning ants')
 
         (
             # [top_span_num, pruned_ant_num], [top_span_num, pruned_ant_num]
@@ -549,7 +549,7 @@ class Model(nn.Module):
 
         # [top_span_num, top_span_num]
         antecedent_distance_buckets = self.get_offset_bucket_idxes_batch(antecedent_offsets).to(top_span_embeddings.device)
-        distance_scores = self.ant_distance_scorer(torch.arange(self.num_dist_buckets, device=top_span_embeddings.device))
+        distance_scores = self.ant_distance_scorer(torch.arange(self.num_dist_buckets, device=top_span_embeddings.device).unsqueeze(1))
         antecedent_distance_scores = distance_scores[antecedent_distance_buckets]
         full_fast_ant_scores_of_spans += antecedent_distance_scores
 
@@ -630,8 +630,9 @@ class Model(nn.Module):
         """
         [0, 1, 2, 3, 4, 5-7, 8-15, 16-31, 32-63, 64+].
         """
-        offsets_batch_for_log = offsets_batch.masked_fill(offsets_batch <= 1, 1).float()
-        log_space_idxes_batch = (torch.log(offsets_batch_for_log) / math.log(2)).floor().long() + 3
+        offsets_batch_for_log = offsets_batch.clone()
+        offsets_batch_for_log.masked_fill_(offsets_batch_for_log <= 1, 1)
+        log_space_idxes_batch = (torch.log(offsets_batch_for_log.float()) / math.log(2)).floor().long() + 3
 
         identity_mask_batch = (offsets_batch <= 4).long()
 

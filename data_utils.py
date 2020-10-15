@@ -15,6 +15,7 @@ import pdb
 import h5py
 import torch
 import torch.utils.data as tud
+from transformers import AutoTokenizer
 
 import util
 
@@ -39,7 +40,6 @@ class PrpDataset(tud.Dataset):
         self.config = config
         self.genre_to_id = {genre: id_ for id_, genre in enumerate(self.config['id_to_genre'])}
         self.examples = [json.loads(line) for line in open(self.config[f'{name}_path'])]
-        from transformers import AutoTokenizer
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", cache_dir=self.config['bert_cache_dir'])
 
     def __len__(self):
@@ -203,12 +203,8 @@ class PrpDataset(tud.Dataset):
         # [cand_num]
         cand_cluster_ids = cand_cluster_ids[cand_mask]
 
-        dialog_info = [
-            example['clusters'], 
-            example['doc_key'], 
-            example['pronoun_info'], 
-            example['sentences']
-        ]
+        # [cand_num]
+        cand_mention_labels = cand_cluster_ids > 0
 
         return (
             example_idx,
@@ -216,7 +212,7 @@ class PrpDataset(tud.Dataset):
             speaker_ids, genre_id,
             gold_starts, gold_ends, gold_cluster_ids,
             candidate_starts, candidate_ends, cand_cluster_ids),
-            dialog_info
+            cand_mention_labels
         )
 
     @staticmethod
@@ -226,13 +222,13 @@ class PrpDataset(tud.Dataset):
         # breakpoint()
 
         # return batch
-        (example_idx, tensors, dialog_info), = batch
+        (example_idx, tensors, cand_mention_labels), = batch
 
 
         return (
             example_idx,
             tensors,
-            dialog_info
+            cand_mention_labels
         )
 
 

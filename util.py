@@ -16,9 +16,9 @@ import subprocess
 import numpy as np
 import pyhocon
 
+from torch.utils.tensorboard import SummaryWriter
 
 def TensorboardWriter(save_path):
-    from torch.utils.tensorboard import SummaryWriter
     return SummaryWriter(save_path, comment="Unmt")
 
 def initialize_from_env(eval_test=False):
@@ -27,6 +27,10 @@ def initialize_from_env(eval_test=False):
 
     if len(sys.argv) >= 2:
         name = sys.argv[1]
+    else:
+        name = 'debug'
+    if len(sys.argv) >= 3:
+        name = sys.argv[2]
     else:
         name = 'debug'
     print("Running experiment: {}".format(name))
