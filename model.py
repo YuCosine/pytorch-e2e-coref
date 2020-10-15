@@ -1,13 +1,12 @@
 from model_utils import init_params, build_len_mask_batch
 from modules import Squeezer
-import data_utils
+import math
 from functools import cmp_to_key
 import time
 
 import torch
 from torch import nn
 import torch.nn.functional as F
-from transformers import AutoModel
 
 
 class Model(nn.Module):
@@ -15,12 +14,17 @@ class Model(nn.Module):
         super().__init__()
 
         self.config = config
+        self.num_dist_buckets = 10
 
+        from transformers import AutoModel
         self.encoder = AutoModel.from_pretrained('bert-base-uncased', cache_dir=self.config['bert_cache_dir'])
 
-        self.span_width_embedder = nn.Embedding(
-            num_embeddings=self.config['max_span_width'],
-            embedding_dim=self.config['feature_size']
+        self.span_width_embedder = nn.Sequential(
+            nn.Embedding(
+                num_embeddings=self.config['max_span_width'],
+                embedding_dim=self.config['feature_size']
+            ),
+            nn.Dropout(self.config['dropout_prob'])
         )
         self.head_scorer = nn.Sequential(
             nn.Linear(self.config['span_embedding_dim'], 1),
@@ -32,9 +36,9 @@ class Model(nn.Module):
             nn.Linear(span_embedding_dim, self.config['ffnn_size']),
             nn.ReLU(),
             nn.Dropout(self.config['dropout_prob']),
-            nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
-            nn.ReLU(),
-            nn.Dropout(self.config['dropout_prob']),
+            # nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
+            # nn.ReLU(),
+            # nn.Dropout(self.config['dropout_prob']),
             nn.Linear(self.config['ffnn_size'], 1),
             Squeezer(dim=-1)
         )
@@ -47,21 +51,21 @@ class Model(nn.Module):
             nn.Linear(self.config['feature_size'], self.config['ffnn_size']),
             nn.ReLU(),
             nn.Dropout(self.config['dropout_prob']),
-            nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
-            nn.ReLU(),
-            nn.Dropout(self.config['dropout_prob']),
+            # nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
+            # nn.ReLU(),
+            # nn.Dropout(self.config['dropout_prob']),
             nn.Linear(self.config['ffnn_size'], 1),
             Squeezer(dim=-1)
         )
 
         self.ant_distance_scorer = nn.Sequential(
             nn.Embedding(
-                num_embeddings=10,
+                num_embeddings=self.num_dist_buckets,
                 embedding_dim=self.config['feature_size']
             ),
             nn.Dropout(self.config['dropout_prob']),
             nn.Linear(self.config['feature_size'], 1),
-            Squeezer(dim=-1)
+            Squeezer(dim=-1) # TODO here
         )        
 
         self.src_span_projector = nn.Linear(
@@ -79,7 +83,7 @@ class Model(nn.Module):
         )
 
         self.ant_offset_embedder = nn.Embedding(
-            num_embeddings=10,
+            num_embeddings=self.num_dist_buckets,
             embedding_dim=self.config['feature_size']
         )
 
@@ -88,9 +92,9 @@ class Model(nn.Module):
             nn.Linear(pair_embedding_dim, self.config['ffnn_size']),
             nn.ReLU(),
             nn.Dropout(self.config['dropout_prob']),
-            nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
-            nn.ReLU(),
-            nn.Dropout(self.config['dropout_prob']),
+            # nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
+            # nn.ReLU(),
+            # nn.Dropout(self.config['dropout_prob']),
             nn.Linear(self.config['ffnn_size'], 1),
             Squeezer(dim=-1)
         )
@@ -105,8 +109,6 @@ class Model(nn.Module):
 
     def init_params(self):
         for name, module in self.named_children():
-            print(name)
-            print(module)
             if 'encoder' not in name:
                 module.apply(init_params)
 
@@ -124,11 +126,10 @@ class Model(nn.Module):
         # [span_num]
         span_width_ids = span_widths - 1  # [k]
 
+        # [max_span_width, span_width_embedding_dim]
+        width_scores = self.span_width_embedder(torch.arange(self.config["max_span_width"], device=start_idxes.device))
         # [span_num, span_width_embedding_dim]
-        span_width_embeddings = F.dropout(
-            self.span_width_embedder(span_width_ids),
-            p=self.config['dropout_prob'], training=self.training
-        )
+        span_width_embeddings = width_scores[span_width_ids]
 
         # [span_num, max_span_width]
         idxes_of_spans = torch.clamp(
@@ -147,7 +148,7 @@ class Model(nn.Module):
         head_scores_of_spans = self.head_scores[idxes_of_spans]
 
         # [span_num, max_span_width]
-        span_masks = build_len_mask_batch(span_widths, self.config['max_span_width']).view(-1, self.config['max_span_width'])
+        span_masks = build_len_mask_batch(span_widths, self.config['max_span_width'])
         # [span_num, max_span_width]
         head_scores_of_spans.masked_fill_(~span_masks, -float('inf'))
         # [span_num, max_span_width, 1]
@@ -251,7 +252,7 @@ class Model(nn.Module):
         #     last_end_idx = end_idx
 
         return torch.as_tensor(
-            top_span_idxes + [top_span_idxes[0]] * (top_span_num - selected_span_num)
+            top_span_idxes
         )
 
     def forward(
@@ -280,8 +281,8 @@ class Model(nn.Module):
         start_time = time.time()
 
         # [num_seg, num_words, hidden_size]
-        mention_doc = self.encoder(input_ids, attention_mask=input_mask)[0]
-        mention_doc = self.flatten_emb_by_sentence(mention_doc, input_mask)
+        mention_doc = self.encoder(input_ids, attention_mask=input_mask)[0] # [num_seg, num_words, emb]
+        mention_doc = self.flatten_emb_by_sentence(mention_doc, input_mask) # [num_words, emb]
 
         num_words = mention_doc.size(0)
 
@@ -294,8 +295,9 @@ class Model(nn.Module):
         # [cand_num]
         cand_mention_scores = self.get_mention_scores(candidate_span_emb, candidate_starts, candidate_ends)
 
-        top_cand_num = int(num_words * self.config['top_span_ratio'])
+        top_cand_num = min(3900, int(num_words * self.config['top_span_ratio']))
 
+        # debug
         # print('extracting top spans')
 
         # [top_cand_num]
@@ -309,6 +311,12 @@ class Model(nn.Module):
             top_cand_num,
         )
 
+        # debug
+        # print('top spans extracted')
+
+
+        top_cand_num = top_span_idxes.size(0)
+
         top_start_idxes = candidate_starts[top_span_idxes]
         top_end_idxes = candidate_ends[top_span_idxes]
         # [top_cand_num, span_embedding_dim]
@@ -320,14 +328,13 @@ class Model(nn.Module):
 
         # top_span_sent_idxes = cand_sent_idxes[top_span_idxes]
 
-        # try:
         # [top_cand_num]
+        speaker_ids = self.flatten_emb_by_sentence(speaker_ids, input_mask)
         top_span_speaker_ids = speaker_ids[top_start_idxes]
-        # except:
-        #     breakpoint()
 
         pruned_ant_num = min(self.config['max_top_antecedents'], top_cand_num)
 
+        # debug
         # print('pruning ants')
 
         (
@@ -349,19 +356,16 @@ class Model(nn.Module):
 
         # top_fast_ant_scores_of_spans = top_fast_ant_scores_of_spans.to(torch.device(1))
 
-        device = top_fast_ant_scores_of_spans.device
         # [top_cand_num, 1]
-        dummy_scores = torch.zeros(top_cand_num, 1, device=device)
+        dummy_scores = torch.zeros(top_cand_num, 1, device=top_fast_ant_scores_of_spans.device)
         # top_span_embeddings = top_span_embeddings.to(torch.device(1))
 
         top_ant_scores_of_spans = None
 
         # [genre_embedding_dim]
-        genre_embedding = self.genre_embedder(genre_id.view(1, 1).to(device)).view(-1)
+        genre_embedding = self.genre_embedder(genre_id.view(1, 1)).view(-1)
 
         for i in range(self.config['coref_depth']):
-            # for i in range(1):
-            # print(f'depth {i}')
 
             # [top_span_num, pruned_ant_num, span_embedding_dim]
             top_ant_embeddings_of_spans = top_span_embeddings[top_ant_idxes_of_spans]
@@ -507,7 +511,7 @@ class Model(nn.Module):
         pair_embeddings_of_spans = torch.cat(
             (
                 # [top_span_num, pruned_ant_num, span_embedding_dim]
-                top_span_embeddings.view(top_span_num, 1, -1).expand(-1, pruned_ant_num, -1),
+                top_span_embeddings.view(top_span_num, 1, -1).repeat(1, pruned_ant_num, 1),
                 # [top_span_num, pruned_ant_num, span_embedding_dim]
                 top_ant_embeddings_of_spans,
                 # [top_span_num, pruned_ant_num, span_embedding_dim]
@@ -533,7 +537,7 @@ class Model(nn.Module):
     ):
         top_span_num = top_span_embeddings.size(0)
 
-        span_idxes = torch.arange(top_span_num)
+        span_idxes = torch.arange(top_span_num, device=top_span_embeddings.device)
         # [top_span_num, top_span_num]
         antecedent_offsets = span_idxes.view(-1, 1) - span_idxes.view(1, -1)
         # [top_span_num, top_span_num]
@@ -544,8 +548,8 @@ class Model(nn.Module):
         full_fast_ant_scores_of_spans += self.get_fast_ant_scores_of_spans(top_span_embeddings)
 
         # [top_span_num, top_span_num]
-        antecedent_distance_buckets = self.bucket_distance(antecedent_offsets)
-        distance_scores = self.ant_distance_scorer(torch.arange(self.self.config["max_span_width"], device=top_span_embeddings.device).unsqueeze(1))
+        antecedent_distance_buckets = self.get_offset_bucket_idxes_batch(antecedent_offsets).to(top_span_embeddings.device)
+        distance_scores = self.ant_distance_scorer(torch.arange(self.num_dist_buckets, device=top_span_embeddings.device))
         antecedent_distance_scores = distance_scores[antecedent_distance_buckets]
         full_fast_ant_scores_of_spans += antecedent_distance_scores
 
@@ -554,7 +558,7 @@ class Model(nn.Module):
             # [top_span_num, top_span_num]
             full_fast_ant_scores_of_spans, k=pruned_ant_num, dim=-1, sorted=False
         )
-        top_ant_idxes_of_spans = top_ant_idxes_of_spans.cpu()
+        # top_ant_idxes_of_spans = top_ant_idxes_of_spans.cpu()
         # [top_span_num, 1]
         span_idxes = span_idxes.view(-1, 1)
         # [top_span_num, pruned_ant_num]
@@ -605,9 +609,9 @@ class Model(nn.Module):
 
         emb_rank = len(emb.size())
         if emb_rank == 2:
-          flattened_emb = emb.reshape(num_sentences * max_sentence_length)
+            flattened_emb = emb.reshape(num_sentences * max_sentence_length)
         elif emb_rank == 3:
-          flattened_emb = emb.reshape(num_sentences * max_sentence_length, emb.size(2))
+            flattened_emb = emb.reshape(num_sentences * max_sentence_length, emb.size(2))
         else:
             raise ValueError("Unsupported rank: {}".format(emb_rank))
         return flattened_emb[text_len_mask.reshape(num_sentences * max_sentence_length)]
@@ -615,19 +619,19 @@ class Model(nn.Module):
 
     def get_mention_scores(self, span_emb, span_starts, span_ends):
         span_scores = self.mention_scorer(span_emb)
-        width_scores = self.span_width_scorer(torch.arange(self.self.config["max_span_width"], device=span_starts.device).unsqueeze(1))
+        width_scores = self.span_width_scorer(torch.arange(self.config["max_span_width"], device=span_starts.device))
         span_width_index = span_ends - span_starts # [NC]
         width_scores = width_scores[span_width_index]
         span_scores += width_scores
         return span_scores
 
 
-    @staticmethod
-    def get_offset_bucket_idxes_batch(offsets_batch):
+    def get_offset_bucket_idxes_batch(self, offsets_batch):
         """
         [0, 1, 2, 3, 4, 5-7, 8-15, 16-31, 32-63, 64+].
         """
-        log_space_idxes_batch = (torch.log(offsets_batch.float()) / math.log(2)).floor().long() + 3
+        offsets_batch_for_log = offsets_batch.masked_fill(offsets_batch <= 1, 1).float()
+        log_space_idxes_batch = (torch.log(offsets_batch_for_log) / math.log(2)).floor().long() + 3
 
         identity_mask_batch = (offsets_batch <= 4).long()
 

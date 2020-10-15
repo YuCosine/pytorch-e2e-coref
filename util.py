@@ -16,9 +16,9 @@ import subprocess
 import numpy as np
 import pyhocon
 
-from torch.utils.tensorboard import SummaryWriter
 
 def TensorboardWriter(save_path):
+    from torch.utils.tensorboard import SummaryWriter
     return SummaryWriter(save_path, comment="Unmt")
 
 def initialize_from_env(eval_test=False):
@@ -69,11 +69,6 @@ def set_log_file(fname):
 def copy_checkpoint(source, target):
     for ext in (".index", ".data-00000-of-00001"):
         shutil.copyfile(source + ext, target + ext)
-
-
-def set_gpus(*gpus):
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in gpus)
-    print("Setting CUDA_VISIBLE_DEVICES to: {}".format(os.environ["CUDA_VISIBLE_DEVICES"]))
 
 
 def flatten(l):

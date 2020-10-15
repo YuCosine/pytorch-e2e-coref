@@ -15,7 +15,6 @@ import pdb
 import h5py
 import torch
 import torch.utils.data as tud
-from transformers import AutoTokenizer
 
 import util
 
@@ -40,6 +39,7 @@ class PrpDataset(tud.Dataset):
         self.config = config
         self.genre_to_id = {genre: id_ for id_, genre in enumerate(self.config['id_to_genre'])}
         self.examples = [json.loads(line) for line in open(self.config[f'{name}_path'])]
+        from transformers import AutoTokenizer
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", cache_dir=self.config['bert_cache_dir'])
 
     def __len__(self):
@@ -113,7 +113,6 @@ class PrpDataset(tud.Dataset):
         input_ids, input_mask, speaker_ids = [], [], []
         for i, (sentence, speaker) in enumerate(zip(sentences, speakers)):
             # sent_input_ids = self.tokenizer.encode(sentence, add_special_tokens=False)
-            sentence = [word.lower() for word in sentence]
             sent_input_ids = self.tokenizer.convert_tokens_to_ids(sentence)
             sent_len = len(sent_input_ids)
             sent_input_mask = [1] * sent_len
@@ -204,8 +203,12 @@ class PrpDataset(tud.Dataset):
         # [cand_num]
         cand_cluster_ids = cand_cluster_ids[cand_mask]
 
-        # [cand_num]
-        cand_mention_labels = cand_cluster_ids > 0
+        dialog_info = [
+            example['clusters'], 
+            example['doc_key'], 
+            example['pronoun_info'], 
+            example['sentences']
+        ]
 
         return (
             example_idx,
@@ -213,7 +216,7 @@ class PrpDataset(tud.Dataset):
             speaker_ids, genre_id,
             gold_starts, gold_ends, gold_cluster_ids,
             candidate_starts, candidate_ends, cand_cluster_ids),
-            cand_mention_labels
+            dialog_info
         )
 
     @staticmethod
@@ -223,24 +226,13 @@ class PrpDataset(tud.Dataset):
         # breakpoint()
 
         # return batch
-        (example_idx, *tensors, cand_mention_labels), = batch
-        # breakpoint()
+        (example_idx, tensors, dialog_info), = batch
 
-        # assert tensors[2].dtype == np.float32
-
-        # print(torch.as_tensor(tensors[2]).cuda().type())
 
         return (
             example_idx,
             tensors,
-            cand_mention_labels
-            # tuple(
-            #     # map(
-            #     #     lambda tensor: torch.as_tensor(tensor).cuda(),
-            #     #     # lambda tensor: tensor.cuda(),
-            #     #     tensors
-            #     # )
-            # )
+            dialog_info
         )
 
 
@@ -281,6 +273,9 @@ def get_doc_stats(datasets, names):
             max_sent_len = max(max_sent_len, max(len(sent) for sent in example['sentences']))
 
         print(f'{name}: max_num_words = {max_num_words}, max_sent_len = {max_sent_len}')
+
+        # debug
+        d0 = datasets[name][0]
 
 
 if __name__ == '__main__':

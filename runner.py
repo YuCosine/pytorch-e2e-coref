@@ -41,7 +41,7 @@ class Runner:
         self.max_f1_epoch_idx = 0
 
         if self.config["max_ckpt_to_keep"] > 0:
-            self.ckpt_queue = deque([], maxlen=config["max_ckpt_to_keep"])
+            self.checkpoint_queue = deque([], maxlen=config["max_ckpt_to_keep"])
 
         self.writer = TensorboardWriter(config["log_dir"])
 
@@ -73,28 +73,28 @@ class Runner:
         top_span_num = top_span_cluster_ids.size(0)
 
         # [top_cand_num, 1]
-        non_dummy_span_mask = (top_span_cluster_ids > 0).view(-1, 1)
+        non_dummy_indicator = (top_span_cluster_ids > 0).view(-1, 1)
 
-        top_ant_cluster_ids_of_spans.masked_fill_(~top_ant_mask_of_spans, -float('inf'))
+        top_ant_cluster_ids_of_spans.masked_fill_(~top_ant_mask_of_spans, -1)
         # [top_cand_num, pruned_ant_num]
-        top_ant_indicators_of_spans = top_ant_cluster_ids_of_spans == top_span_cluster_ids.view(-1, 1)
+        same_cluster_indicator = top_ant_cluster_ids_of_spans == top_span_cluster_ids.view(-1, 1)
 
         # [top_cand_num, pruned_ant_num]
-        non_dummy_top_ant_indicators_of_spans = top_ant_indicators_of_spans & non_dummy_span_mask
+        pairwise_labels = same_cluster_indicator & non_dummy_indicator
 
         # [top_cand_num, 1 + pruned_ant_num]
-        top_ant_indicators_of_spans = torch.cat(
+        top_antecedent_labels = torch.cat(
             (
                 # [top_cand_num, 1]
-                ~non_dummy_top_ant_indicators_of_spans.any(dim=1, keepdim=True),
+                ~(pairwise_labels.any(dim=1, keepdim=True)),
                 # [top_cand_num, pruned_ant_num]
-                non_dummy_top_ant_indicators_of_spans
+                pairwise_labels
             ), dim=1
         )
 
         loss = -(
                 torch.logsumexp(
-                    top_ant_scores_of_spans.masked_fill_(~top_ant_cluster_ids_of_spans, -float('inf')),
+                    top_ant_scores_of_spans.masked_fill(~top_antecedent_labels, -float('inf')),
                     dim=1
                 ) - torch.logsumexp(top_ant_scores_of_spans, dim=1)
             ).sum()
@@ -121,8 +121,6 @@ class Runner:
         # list_of_top_ant_scores_of_spans,
         # [top_span_num, pruned_ant_num]
         top_ant_mask_of_spans,
-        # # [doc_len, pos_tag_num]
-        # pos_tag_logits
     ):
         # (
         #
@@ -202,10 +200,10 @@ class Runner:
             next_evaluating_pct = self.config["next_evaluating_pct"] 
             start_time = time.time()
 
-            for example_idx, input_tensors, cand_mention_labels in data_loaders['train']:
-                input_tensors = [t.cuda() if isinstance(t, torch.Tensor) else t for t in input_tensors]
+            for example_idx, input_tensors, dialog_info in data_loaders['train']:
+                input_tensors = [t.cuda() for t in input_tensors]
                 batch_num += 1
-                pct = batch_num / len(data_loaders['train'])
+                pct = batch_num / len(data_loaders['train']) * 100
 
                 self.optimizer.zero_grad()
 
@@ -267,18 +265,18 @@ class Runner:
                     na_str = 'N/A'
 
                     print(
-                        f'{int(pct)}%, time: {time.time() - start_time} avg_epoch_loss: {avg_epoch_loss / batch_num}'
+                        f'{int(pct)}%, time: {time.time() - start_time:.2f} avg_epoch_loss: {avg_epoch_loss / batch_num:.4f}'
                     )
 
                     next_logging_pct += self.config["next_logging_pct"]
 
-                    iter_now = int(len(PrpDataset) * (epoch_idx + pct))
+                    iter_now = int(len(data_loaders['train']) * (epoch_idx + pct))
                     self.writer.add_scalar('Train/loss', avg_epoch_loss / batch_num, iter_now)
 
 
                 if pct >= next_evaluating_pct:
-                    iter_now = int(len(PrpDataset) * (epoch_idx + pct))
-                    avg_f1 = self.evaluate(data_loaders['val'], iter_now)
+                    iter_now = int(len(data_loaders['train']) * (epoch_idx + pct))
+                    avg_f1 = self.evaluate(data_loaders['eval'], iter_now)
 
                     if avg_f1 > self.max_f1:
                         self.max_f1 = avg_f1
@@ -293,12 +291,12 @@ class Runner:
             na_str = 'N/A'
 
             print(
-                f'100%,\ttime:\t{time.time() - start_time} avg_epoch_loss:\t{avg_epoch_loss}'
+                f'100%,\ttime:\t{time.time() - start_time:.2f} avg_epoch_loss:\t{avg_epoch_loss:.4f}'
             )
 
 
-            iter_now = int(len(PrpDataset) * (epoch_idx + pct))
-            avg_f1 = self.evaluate(data_loaders['val'], iter_now)
+            iter_now = int(len(data_loaders['train']) * (epoch_idx + pct))
+            avg_f1 = self.evaluate(data_loaders['eval'], iter_now)
             ckpt_path = self.save_ckpt()
 
             if self.config["max_ckpt_to_keep"] > 0:
@@ -335,11 +333,10 @@ class Runner:
             start_time = time.time()
             cluster_predictions = {}
 
-            for example_idx, input_tensors, cand_mention_labels in data_loader:
-                input_tensors = [t.cuda() if isinstance(t, torch.Tensor) else t for t in input_tensors]
-                cand_mention_labels = cand_mention_labels.cuda()
+            for example_idx, input_tensors, dialog_info in data_loader:
+                input_tensors = [t.cuda() for t in input_tensors]
                 batch_num += 1
-                pct = batch_num / len(data_loader)
+                pct = batch_num / len(data_loader) * 100
 
                 (
                     # [cand_num]
@@ -360,8 +357,6 @@ class Runner:
                     # list_of_top_ant_scores_of_spans,
                     # [top_span_num, pruned_ant_num]
                     top_ant_mask_of_spans,
-                    # [doc_len, pos_tag_num]
-                    pos_tag_logits,
                     # [top_span_num, 1 + top_span_num], [top_span_num, top_span_num]
                     full_fast_ant_scores_of_spans, full_ant_mask_of_spans
                 ) = self.model(*input_tensors)
@@ -411,14 +406,15 @@ class Runner:
                     # [top_cand_num, pruned_ant_num]
                     top_ant_cluster_ids_of_spans,
                     # # [top_cand_num, 1 + pruned_ant_num]
-                    # top_ant_scores_of_spans,
+                    top_ant_scores_of_spans,
                     # 4 * [top_cand_num, 1 + pruned_ant_num]
                     # list_of_top_ant_scores_of_spans,
                     # [top_span_num, pruned_ant_num]
                     top_ant_mask_of_spans
                 )
 
-                gold_clusters = data_loader.get_gold_clusters(example_idx)
+                gold_clusters, doc_key, pronoun_info, sentences = dialog_info
+
                 gold_clusters = [
                     tuple(tuple(span) for span in cluster)
                     for cluster in gold_clusters
@@ -435,14 +431,13 @@ class Runner:
                     mention_to_predicted=span_to_predicted_cluster,
                     mention_to_gold=span_to_gold_cluster
                 )
-                cluster_predictions[data_loader.get_doc_key(example_idx)] = predicted_clusters
+                cluster_predictions[doc_key] = predicted_clusters
 
-                pr_coref_evaluator.update(predicted_clusters, data_loader.get_pronoun_info(example_idx), 
-                                          data_loader.get_sentences(example_idx))
+                pr_coref_evaluator.update(predicted_clusters, pronoun_info, sentences)
 
                 if pct >= next_logging_pct:
                     print(
-                        f'{int(pct)}%,\ttime:\t{time.time() - start_time}'
+                        f'{int(pct)}%,\ttime:\t{time.time() - start_time:.2f}'
                     )
                     next_logging_pct += 5.
 
@@ -452,11 +447,11 @@ class Runner:
             na_str = 'N/A'
 
             print(
-                f'avg_valid_time:\t{time.time() - start_time}\n'
-                f'avg loss:\t{avg_loss}\n'
-                f'Coref average precision:\t{epoch_precision}\n'
-                f'Coref average recall:\t{epoch_recall}\n'
-                f'Coref average f1:\t{epoch_f1}\n'
+                f'avg_valid_time:\t{time.time() - start_time:.2f}\n'
+                f'avg loss:\t{avg_loss:.4f}\n'
+                f'Coref average precision:\t{epoch_precision:.4f}\n'
+                f'Coref average recall:\t{epoch_recall:.4f}\n'
+                f'Coref average f1:\t{epoch_f1:.4f}\n'
             )
 
             self.writer.add_scalar('Val/loss', avg_loss, iter_now)
@@ -467,10 +462,9 @@ class Runner:
             pr_coref_results = pr_coref_evaluator.get_prf()
 
             print(
-                f'avg_valid_time:\t{time.time() - start_time}\n'
-                f'Pronoun Coref average precision:\t{pr_coref_results["p"]}\n'
-                f'Pronoun Coref average recall:\t{pr_coref_results["r"]}\n'
-                f'Pronoun Coref average f1:\t{pr_coref_results["f"]}\n'
+                f'Pronoun Coref average precision:\t{pr_coref_results["p"]:.4f}\n'
+                f'Pronoun Coref average recall:\t{pr_coref_results["r"]:.4f}\n'
+                f'Pronoun Coref average f1:\t{pr_coref_results["f"]:.4f}\n'
             )
 
             self.writer.add_scalar('Val/pronoun coref precision', pr_coref_results['p'], iter_now)
@@ -542,8 +536,8 @@ class Runner:
                 if len(ckpt_paths) == 0:
                     print(f'No .ckpt found in {self.config["log_dir"]}')
                     return
-                sort_func = lambda x:int(re.search(r"(\d+)", x).groups(0))
-                ckpt_path = f'{self.config["log_dir"]}/{sorted(ckpt_paths, key=sort_func)}'
+                sort_func = lambda x:int(re.search(r"(\d+)", x).groups()[0])
+                ckpt_path = f'{self.config["log_dir"]}/{sorted(ckpt_paths, key=sort_func, reverse=True)[0]}'
 
         print(f'loading checkpoint {ckpt_path}')
 
@@ -556,6 +550,10 @@ if __name__ == '__main__':
         sys.argv.append(args.model)
     else:
         sys.argv[1] = args.model  
+    if len(sys.argv) == 2:
+        sys.argv.append(args.mode)
+    else:
+        sys.argv[2] = args.mode  
 
     # initialization
     config = initialize_from_env()
@@ -574,33 +572,37 @@ if __name__ == '__main__':
 
     config['training'] = args.mode == 'train'
     config['validating'] = args.mode == 'eval'
+    config['debugging'] = args.mode == 'debug'
 
     # prepare dataset
     if config['training']:
-        names = ('train', 'val')
+        splits = {'train': 'train', 'eval': 'val'}
     elif config['validating']: 
-        names = ('test',) 
+        splits = {'eval': 'test'}
+    elif config['debugging']:
+        splits = {'train': 'val', 'eval': 'test'}
     datasets = {
-        name: PrpDataset(name, config)
-        for name in names
+        split: PrpDataset(splits[split], config)
+        for split in splits
     }
     data_loaders = {
-        name: tud.DataLoader(
-            dataset=datasets[name],
+        split: tud.DataLoader(
+            dataset=datasets[split],
             batch_size=1,
-            shuffle=(name == 'train'),
+            shuffle=(split == 'train' and config['training']),
             # pin_memory=True,
             collate_fn=PrpDataset.collate_fn,
             num_workers=4
         )
-        for name in names
+        for split in splits
     }
-    config['train_steps'] = len(datasets[names[0]]) * config['num_epochs']
-    config['warmup_steps'] = config['train_steps'] * 0.1
+    if not config['validating']:
+        config['train_steps'] = len(datasets['train']) * config['num_epochs']
+        config['warmup_steps'] = config['train_steps'] * 0.1
 
     runner = Runner(config)
 
-    if config['training']:
+    if config['training'] or config['debugging']:
         runner.train(data_loaders)
     elif config['validating']:
-        runner.evaluate(data_loaders[names[-1]])
+        runner.evaluate(data_loaders['eval'])
