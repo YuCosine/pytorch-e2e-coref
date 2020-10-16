@@ -199,7 +199,7 @@ class Runner:
             avg_epoch_loss = 0.
             batch_num = 0
             next_logging_pct = .5
-            next_evaluating_pct = self.config["next_evaluating_pct"] 
+            next_evaluating_pct = self.config["next_evaluating_pct"] + .5
             start_time = time.time()
 
             for example_idx, input_tensors, cand_mention_labels in data_loaders['train']:
@@ -332,7 +332,7 @@ class Runner:
             self.model.eval()
             batch_num = 0
             avg_loss = 0.
-            next_logging_pct = 10.
+            next_logging_pct = 20.
             start_time = time.time()
             cluster_predictions = {}
 
