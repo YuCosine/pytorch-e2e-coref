@@ -43,7 +43,8 @@ class Runner:
         if self.config["max_ckpt_to_keep"] > 0:
             self.checkpoint_queue = deque([], maxlen=config["max_ckpt_to_keep"])
 
-        self.writer = TensorboardWriter(config["log_dir"])
+        if not self.config['debugging']:
+            self.writer = TensorboardWriter(config["log_dir"])
 
     @staticmethod
     def compute_ant_loss(
@@ -271,7 +272,11 @@ class Runner:
                     next_logging_pct += self.config["next_logging_pct"]
 
                     iter_now = int(len(data_loaders['train']) * (epoch_idx + pct))
-                    self.writer.add_scalar('Train/loss', avg_epoch_loss / batch_num, iter_now)
+                    if not self.config['debugging']:
+                        self.writer.add_scalar('Train/loss', avg_epoch_loss / batch_num, iter_now)
+                        bert_lr, task_lr = self.optimizer.learning_rate()
+                        self.writer.add_scalar('Train/lr_bert', bert_lr, iter_now)
+                        self.writer.add_scalar('Train/lr_task', task_lr, iter_now)
 
 
                 if pct >= next_evaluating_pct:
@@ -454,10 +459,11 @@ class Runner:
                 f'Coref average f1:\t{epoch_f1:.4f}\n'
             )
 
-            self.writer.add_scalar('Val/loss', avg_loss, iter_now)
-            self.writer.add_scalar('Val/coref precision', epoch_precision, iter_now)
-            self.writer.add_scalar('Val/coref recall', epoch_recall, iter_now)
-            self.writer.add_scalar('Val/coref f1', epoch_f1, iter_now)
+            if not self.config['debugging']:
+                self.writer.add_scalar('Val/loss', avg_loss, iter_now)
+                self.writer.add_scalar('Val/coref precision', epoch_precision, iter_now)
+                self.writer.add_scalar('Val/coref recall', epoch_recall, iter_now)
+                self.writer.add_scalar('Val/coref f1', epoch_f1, iter_now)
 
             pr_coref_results = pr_coref_evaluator.get_prf()
 
@@ -467,9 +473,10 @@ class Runner:
                 f'Pronoun Coref average f1:\t{pr_coref_results["f"]:.4f}\n'
             )
 
-            self.writer.add_scalar('Val/pronoun coref precision', pr_coref_results['p'], iter_now)
-            self.writer.add_scalar('Val/pronoun coref recall', pr_coref_results['r'], iter_now)
-            self.writer.add_scalar('Val/pronoun coref f1', pr_coref_results['f'], iter_now)
+            if not self.config['debugging']:
+                self.writer.add_scalar('Val/pronoun coref precision', pr_coref_results['p'], iter_now)
+                self.writer.add_scalar('Val/pronoun coref recall', pr_coref_results['r'], iter_now)
+                self.writer.add_scalar('Val/pronoun coref f1', pr_coref_results['f'], iter_now)
 
             return pr_coref_results['f']
 

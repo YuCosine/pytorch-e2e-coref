@@ -22,7 +22,7 @@ def init_params(module):
         nn.init.kaiming_normal_(module.weight.data)
 
         if module.bias is not None:
-            nn.init.normal_(module.bias.data)
+            nn.init.zeros_(module.bias.data)
 
         # print('initialized Linear')
 
