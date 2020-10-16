@@ -15,18 +15,6 @@ from torchvision import models as vmodels
 from torchvision import transforms
 import torch.nn.utils.rnn as rnn_utils
 
-from allennlp.modules.elmo import Elmo, batch_to_ids
-import allennlp.models.coreference_resolution.coref
-
-
-# from scipy.optimize import brentq
-# from scipy.interpolate import interp1d
-# from sklearn.metrics import roc_curve
-
-# random.seed()
-# np.random.seed()
-# torch.cuda.seed_all()
-
 
 def init_params(module):
 
@@ -34,7 +22,7 @@ def init_params(module):
         nn.init.kaiming_normal_(module.weight.data)
 
         if module.bias is not None:
-            nn.init.normal_(module.bias.data)
+            nn.init.zeros_(module.bias.data)
 
         # print('initialized Linear')
 
@@ -93,6 +81,7 @@ def build_torch_optimizer(model, config):
     """
     params = [p for p in model.parameters() if p.requires_grad]
     betas = [0.9, 0.999]
+    exclude_from_weight_decay=['bias', 'LayerNorm.bias', 'LayerNorm.weight']
 
     params = {'bert': [], 'task': []}
     for module_name, module in model.named_children():
@@ -100,20 +89,33 @@ def build_torch_optimizer(model, config):
             param_type = 'bert'
         else:
             param_type = 'task'
-        for param in module.parameters():
+        for param_name, param in module.named_parameters():
             if param.requires_grad:
-                params[param_type].append(param)
-    optimizer = MultipleOptimizer(
-        [optim.Adam(
-            params['task'],
-            lr=config["learning_rate_task"],
-            betas=betas,
-            eps=1e-6),
-         AdamWeightDecay(
-             params['bert'],
-             lr=config["learning_rate_bert"],
-             betas=betas,
-             eps=1e-6)])        
+                if any(ex in param_name for ex in exclude_from_weight_decay):
+                    params[param_type] += [
+                        {"params": [param], 
+                        "weight_decay": 0}
+                    ]
+                else:
+                    params[param_type] += [
+                        {"params": [param], 
+                        "weight_decay": 0.01}
+                    ]
+    bert_optimizer = AdamWeightDecay(params['bert'],
+                                     lr=config["learning_rate_bert"],
+                                     betas=betas,
+                                     eps=1e-6)
+    if config['task_optimizer'] == 'adam_weight_decay':
+        task_optimizer = AdamWeightDecay(params['task'],
+                                         lr=config["learning_rate_task"],
+                                         betas=betas,
+                                         eps=1e-6)
+    elif config['task_optimizer'] == 'adam':
+        task_optimizer = optim.Adam(params['task'],
+                                    lr=config["learning_rate_task"],
+                                    betas=betas,
+                                    eps=1e-6)
+    optimizer = MultipleOptimizer([bert_optimizer, task_optimizer])        
 
     return optimizer
 
@@ -345,8 +347,7 @@ class AdamWeightDecay(Optimizer):
     """
 
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
-                 weight_decay=0, amsgrad=False,
-                 exclude_from_weight_decay=['bias', 'LayerNorm.bias', 'LayerNorm.weight']):
+                 weight_decay=0, amsgrad=False):
         if not 0.0 <= lr:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if not 0.0 <= eps:
@@ -357,7 +358,6 @@ class AdamWeightDecay(Optimizer):
             raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
         if not 0.0 <= weight_decay:
             raise ValueError("Invalid weight_decay value: {}".format(weight_decay))
-        self.exclude_from_weight_decay = exclude_from_weight_decay
         defaults = dict(lr=lr, betas=betas, eps=eps,
                         weight_decay=weight_decay, amsgrad=amsgrad)
         super(AdamWeightDecay, self).__init__(params, defaults)
@@ -431,13 +431,7 @@ class AdamWeightDecay(Optimizer):
                 # Instead we want ot decay the weights in a manner that doesn't interact
                 # with the m/v parameters. This is equivalent to adding the square
                 # of the weights to the loss with plain (non-momentum) SGD.
-                use_wd = True
-                for exclude_name in self.exclude_from_weight_decay:
-                    # TODO: check the key of name
-                    if exclude_name in group['name']:
-                        use_wd = False
-                        break
-                if use_wd and group['weight_decay'] != 0:
+                if group['weight_decay'] != 0:
                     update.add_(p, alpha=group['weight_decay'])
 
                 p.add_(update, alpha=-group['lr'])
