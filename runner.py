@@ -25,8 +25,6 @@ parser.add_argument('model', type=str,
                     help='model name to train or test')
 parser.add_argument('mode', type=str,
                     help='train or eval')
-parser.add_argument('--log_dir', type=str, default='logs', 
-                    help='dir of training log')
 
 
 class Runner:
@@ -578,9 +576,9 @@ if __name__ == '__main__':
     np.random.seed(config['random_seed'])
 
     # set log file
-    config["log_dir"] = os.path.join(args.log_dir, args.model)
-    if not os.path.exists(config["log_dir"]):
-      os.makedirs(config["log_dir"])
+    # config["log_dir"] = os.path.join(args.log_dir, args.model)
+    # if not os.path.exists(config["log_dir"]):
+    #   os.makedirs(config["log_dir"])
     
     log_file = os.path.join(config["log_dir"], f'{args.mode}.log')
     set_log_file(log_file)    
@@ -607,13 +605,13 @@ if __name__ == '__main__':
             shuffle=(split == 'train' and config['training']),
             # pin_memory=True,
             collate_fn=PrpDataset.collate_fn,
-            num_workers=4
+            num_workers=0 if config['debugging'] else 4
         )
         for split in splits
     }
     if not config['validating']:
         config['train_steps'] = len(datasets['train']) * config['num_epochs']
-        config['warmup_steps'] = config['train_steps'] * 0.1
+        config['warmup_steps'] = int(config['train_steps'] * config['warmup_ratio'])
 
     runner = Runner(config)
 

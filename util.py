@@ -29,15 +29,22 @@ def initialize_from_env(eval_test=False):
         name = sys.argv[1]
     else:
         name = 'debug'
+    if len(sys.argv) >= 3:
+        mode = sys.argv[2]
+    else:
+        mode = 'train'
+
     print("Running experiment: {}".format(name))
 
-    if eval_test:
-        config = pyhocon.ConfigFactory.parse_file("test.experiments.conf")[name]
-    else:
-        config = pyhocon.ConfigFactory.parse_file("experiments.conf")[name]
-        config["log_dir"] = os.path.join(config["log_dir"], name)
-        if not os.path.exists(config["log_dir"]):
-            os.makedirs(config["log_dir"])
+    config = pyhocon.ConfigFactory.parse_file("experiments.conf")[name]
+
+    if mode == 'debug':
+        name += '_debug'
+
+    config["log_dir"] = os.path.join(config["log_dir"], name)
+    if not os.path.exists(config["log_dir"]):
+        os.makedirs(config["log_dir"])
+    print(f"Results saved to {config['log_dir']}")
 
     config['timestamp'] = datetime.datetime.now().strftime('%m%d-%H%M%S')
 
