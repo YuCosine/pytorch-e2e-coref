@@ -45,18 +45,6 @@ class PrpDataset(tud.Dataset):
     def __len__(self):
         return len(self.examples)
 
-    def get_gold_clusters(self, example_idx):
-        return self.examples[example_idx]['clusters']
-
-    def get_doc_key(self, example_idx):
-        return self.examples[example_idx]['doc_key']
-
-    def get_pronoun_info(self, example_idx):
-        return self.examples[example_idx]['pronoun_info']
-
-    def get_sentences(self, example_idx):
-        return self.examples[example_idx]['sentences']
-
     def get_speaker_dict(self, speakers):
         speaker_dict = {'UNK': 0, '[SPL]': 1}
         for s in speakers:
