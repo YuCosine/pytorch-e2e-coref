@@ -463,7 +463,7 @@ class Runner:
                 f'Coref average f1:\t{epoch_f1:.4f}\n'
             )
 
-            if self.config['training']:
+            if not self.config['debugging']:
                 self.writer.add_scalar('Val/loss', avg_loss, iter_now)
                 self.writer.add_scalar('Val/coref precision', epoch_precision, iter_now)
                 self.writer.add_scalar('Val/coref recall', epoch_recall, iter_now)
@@ -477,7 +477,7 @@ class Runner:
                 f'Pronoun Coref average f1:\t{pr_coref_results["f"]:.4f}\n'
             )
 
-            if self.config['training']:
+            if not self.config['debugging']:
                 self.writer.add_scalar('Val/pronoun coref precision', pr_coref_results['p'], iter_now)
                 self.writer.add_scalar('Val/pronoun coref recall', pr_coref_results['r'], iter_now)
                 self.writer.add_scalar('Val/pronoun coref f1', pr_coref_results['f'], iter_now)
