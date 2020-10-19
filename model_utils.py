@@ -19,12 +19,18 @@ import torch.nn.utils.rnn as rnn_utils
 def init_params(module):
 
     if isinstance(module, nn.Linear):
-        nn.init.kaiming_normal_(module.weight.data)
+        # nn.init.kaiming_normal_(module.weight.data)
+        nn.init.normal_(module.weight.data, std=0.02)
 
         if module.bias is not None:
-            nn.init.normal_(module.bias.data)
+            nn.init.zeros_(module.bias.data)
 
         # print('initialized Linear')
+
+    elif isinstance(module, nn.Embedding):
+        # nn.init.kaiming_normal_(module.weight.data)
+        nn.init.normal_(module.weight.data, std=0.02)
+
 
     elif isinstance(module, nn.Conv2d) or isinstance(module, nn.Conv1d):
         nn.init.kaiming_normal_(module.weight, mode='fan_out')
@@ -250,8 +256,8 @@ class OptimizerBase(object):
                 # Reset options, keep optimizer.
                 optim_state_dict = ckpt_state_dict
 
-        learning_rates = [optim_opt["learning_rate_task"], 
-            optim_opt["learning_rate_bert"]]
+        learning_rates = [optim_opt["learning_rate_bert"], 
+            optim_opt["learning_rate_task"]]
         decay_fn = [make_learning_rate_decay_fn(optim_opt), 
             make_learning_rate_decay_fn(optim_opt)]
         optimizer = cls(

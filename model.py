@@ -142,10 +142,10 @@ class Model(nn.Module):
         embeddings_of_spans = head_emb[idxes_of_spans]
 
         # [num_words]
-        self.head_scores = self.head_scorer(mention_doc)
+        head_scores = self.head_scorer(mention_doc)
 
         # [span_num, max_span_width]
-        head_scores_of_spans = self.head_scores[idxes_of_spans]
+        head_scores_of_spans = head_scores[idxes_of_spans]
 
         # [span_num, max_span_width]
         span_masks = build_len_mask_batch(span_widths, self.config['max_span_width'])
@@ -301,15 +301,19 @@ class Model(nn.Module):
         # print('extracting top spans')
 
         # [top_cand_num]
-        top_span_idxes = self.extract_top_spans(
-            # [cand_num]
-            cand_mention_scores,
-            # [cand_num]
-            candidate_starts,
-            # [cand_num]
-            candidate_ends,
-            top_cand_num,
-        )
+        if top_cand_num < num_words:
+            top_span_idxes = self.extract_top_spans(
+                # [cand_num]
+                cand_mention_scores,
+                # [cand_num]
+                candidate_starts,
+                # [cand_num]
+                candidate_ends,
+                top_cand_num,
+            )
+        else:
+            top_span_idxes = torch.arange(num_words)
+        top_span_idxes.to(candidate_starts.device)
 
         # debug
         # print('top spans extracted')
@@ -614,7 +618,7 @@ class Model(nn.Module):
             flattened_emb = emb.reshape(num_sentences * max_sentence_length, emb.size(2))
         else:
             raise ValueError("Unsupported rank: {}".format(emb_rank))
-        return flattened_emb[text_len_mask.reshape(num_sentences * max_sentence_length)]
+        return flattened_emb[text_len_mask.bool().reshape(num_sentences * max_sentence_length)]
 
 
     def get_mention_scores(self, span_emb, span_starts, span_ends):

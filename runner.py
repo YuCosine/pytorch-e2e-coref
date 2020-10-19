@@ -34,7 +34,8 @@ class Runner:
         self.config = config
         self.model = Model(config).cuda()
 
-        self.optimizer = OptimizerBase.from_opt(self.model, self.config)
+        if not self.config['validating']:
+            self.optimizer = OptimizerBase.from_opt(self.model, self.config)
 
         self.epoch_idx = 0
         self.max_f1 = 0.
@@ -43,7 +44,8 @@ class Runner:
         if self.config["max_ckpt_to_keep"] > 0:
             self.checkpoint_queue = deque([], maxlen=config["max_ckpt_to_keep"])
 
-        self.writer = TensorboardWriter(config["log_dir"])
+        if not self.config['debugging']:
+            self.writer = TensorboardWriter(config["log_dir"])
 
     @staticmethod
     def compute_ant_loss(
@@ -197,7 +199,7 @@ class Runner:
             avg_epoch_loss = 0.
             batch_num = 0
             next_logging_pct = .5
-            next_evaluating_pct = self.config["next_evaluating_pct"] 
+            next_evaluating_pct = self.config["next_evaluating_pct"] + .5
             start_time = time.time()
 
             for example_idx, input_tensors, dialog_info in data_loaders['train']:
@@ -270,12 +272,16 @@ class Runner:
 
                     next_logging_pct += self.config["next_logging_pct"]
 
-                    iter_now = int(len(data_loaders['train']) * (epoch_idx + pct))
-                    self.writer.add_scalar('Train/loss', avg_epoch_loss / batch_num, iter_now)
+                    iter_now = int(len(data_loaders['train']) * (epoch_idx + pct / 100))
+                    if not self.config['debugging']:
+                        self.writer.add_scalar('Train/loss', avg_epoch_loss / batch_num, iter_now)
+                        bert_lr, task_lr = self.optimizer.learning_rate()
+                        self.writer.add_scalar('Train/lr_bert', bert_lr, iter_now)
+                        self.writer.add_scalar('Train/lr_task', task_lr, iter_now)
 
 
                 if pct >= next_evaluating_pct:
-                    iter_now = int(len(data_loaders['train']) * (epoch_idx + pct))
+                    iter_now = int(len(data_loaders['train']) * (epoch_idx + pct / 100))
                     avg_f1 = self.evaluate(data_loaders['eval'], iter_now)
 
                     if avg_f1 > self.max_f1:
@@ -286,6 +292,9 @@ class Runner:
 
                     next_evaluating_pct += self.config["next_evaluating_pct"]
 
+                    # debug
+                    # ckpt_path = self.save_ckpt()
+
             avg_epoch_loss /= batch_num
 
             na_str = 'N/A'
@@ -295,7 +304,7 @@ class Runner:
             )
 
 
-            iter_now = int(len(data_loaders['train']) * (epoch_idx + pct))
+            iter_now = int(len(data_loaders['train']) * (epoch_idx + pct / 100))
             avg_f1 = self.evaluate(data_loaders['eval'], iter_now)
             ckpt_path = self.save_ckpt()
 
@@ -329,7 +338,7 @@ class Runner:
             self.model.eval()
             batch_num = 0
             avg_loss = 0.
-            next_logging_pct = 10.
+            next_logging_pct = 20.
             start_time = time.time()
             cluster_predictions = {}
 
@@ -454,10 +463,11 @@ class Runner:
                 f'Coref average f1:\t{epoch_f1:.4f}\n'
             )
 
-            self.writer.add_scalar('Val/loss', avg_loss, iter_now)
-            self.writer.add_scalar('Val/coref precision', epoch_precision, iter_now)
-            self.writer.add_scalar('Val/coref recall', epoch_recall, iter_now)
-            self.writer.add_scalar('Val/coref f1', epoch_f1, iter_now)
+            if self.config['training']:
+                self.writer.add_scalar('Val/loss', avg_loss, iter_now)
+                self.writer.add_scalar('Val/coref precision', epoch_precision, iter_now)
+                self.writer.add_scalar('Val/coref recall', epoch_recall, iter_now)
+                self.writer.add_scalar('Val/coref f1', epoch_f1, iter_now)
 
             pr_coref_results = pr_coref_evaluator.get_prf()
 
@@ -467,9 +477,10 @@ class Runner:
                 f'Pronoun Coref average f1:\t{pr_coref_results["f"]:.4f}\n'
             )
 
-            self.writer.add_scalar('Val/pronoun coref precision', pr_coref_results['p'], iter_now)
-            self.writer.add_scalar('Val/pronoun coref recall', pr_coref_results['r'], iter_now)
-            self.writer.add_scalar('Val/pronoun coref f1', pr_coref_results['f'], iter_now)
+            if self.config['training']:
+                self.writer.add_scalar('Val/pronoun coref precision', pr_coref_results['p'], iter_now)
+                self.writer.add_scalar('Val/pronoun coref recall', pr_coref_results['r'], iter_now)
+                self.writer.add_scalar('Val/pronoun coref f1', pr_coref_results['f'], iter_now)
 
             return pr_coref_results['f']
 
@@ -521,7 +532,7 @@ class Runner:
         torch.save(self.ckpt, f=ckpt_path)
         return ckpt_path
 
-    def save_best_ckpt(self):
+    def save_ckpt_best(self):
         ckpt_path = f'{self.config["log_dir"]}/best.ckpt'
         print(f'saving checkpoint {ckpt_path}')
         torch.save(self.ckpt, f=ckpt_path)
@@ -532,7 +543,7 @@ class Runner:
             if self.config['loads_best_ckpt']:
                 ckpt_path = f'{self.config["log_dir"]}/best.ckpt'
             else:
-                ckpt_paths = [path for path in os.listdir(f'{self.config["log_dir"]}/') if path.endswith('.ckpt')]
+                ckpt_paths = [path for path in os.listdir(f'{self.config["log_dir"]}/') if path.endswith('.ckpt') and 'best' not in path]
                 if len(ckpt_paths) == 0:
                     print(f'No .ckpt found in {self.config["log_dir"]}')
                     return
@@ -578,7 +589,7 @@ if __name__ == '__main__':
     if config['training']:
         splits = {'train': 'train', 'eval': 'val'}
     elif config['validating']: 
-        splits = {'eval': 'test'}
+        splits = {'eval': 'val'}
     elif config['debugging']:
         splits = {'train': 'val', 'eval': 'test'}
     datasets = {
