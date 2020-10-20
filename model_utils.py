@@ -111,12 +111,14 @@ def build_torch_optimizer(model, config):
                                      lr=config["learning_rate_bert"],
                                      betas=betas,
                                      eps=1e-6)
-    if config['task_optimizer'] == 'adam_weight_decay':
+    if config['task_optimizer'] == 'adamw':
+        print('Using AdamW as task optimizer')
         task_optimizer = AdamWeightDecay(params['task'],
                                          lr=config["learning_rate_task"],
                                          betas=betas,
                                          eps=1e-6)
     elif config['task_optimizer'] == 'adam':
+        print('Using Adam as task optimizer')
         task_optimizer = optim.Adam(params['task'],
                                     lr=config["learning_rate_task"],
                                     betas=betas,
@@ -126,20 +128,36 @@ def build_torch_optimizer(model, config):
     return optimizer
 
 
-def make_learning_rate_decay_fn(config):
+def make_learning_rate_decay_fn(decay_method, train_steps, **kwargs):
     """Returns the learning decay function from options."""
-    return functools.partial(
-        linear_decay,
-        warmup_steps=config["warmup_steps"], 
-        global_steps=config["train_steps"])
+    if decay_method == "linear":
+        return functools.partial(
+            linear_decay,
+            global_steps=train_steps,
+            **kwargs)
+    elif decay_method == "exp":
+        return functools.partial(
+            exp_decay,
+            global_steps=train_steps,
+            **kwargs)
+    else:
+        raise ValueError(f'{decay_method} not found')
 
 
-def linear_decay(step, warmup_steps, global_steps, initial_learning_rate=1, end_learning_rate=0):
+def linear_decay(step, global_steps, warmup_steps=100, initial_learning_rate=1, end_learning_rate=0, **kargs):
     if step < warmup_steps:
         return initial_learning_rate * step / warmup_steps
     else:
         return (initial_learning_rate - end_learning_rate) * \
                (1 - (step - warmup_steps) / (global_steps - warmup_steps)) + \
+               end_learning_rate
+
+def exp_decay(step, global_steps, decay_exp=1, warmup_steps=100, initial_learning_rate=1, end_learning_rate=0, **kargs):
+    if step < warmup_steps:
+        return initial_learning_rate * step / warmup_steps
+    else:
+        return (initial_learning_rate - end_learning_rate) * \
+               ((1 - (step - warmup_steps) / (global_steps - warmup_steps)) ** decay_exp) + \
                end_learning_rate
 
 
@@ -256,10 +274,20 @@ class OptimizerBase(object):
                 # Reset options, keep optimizer.
                 optim_state_dict = ckpt_state_dict
 
-        learning_rates = [optim_opt["learning_rate_bert"], 
-            optim_opt["learning_rate_task"]]
-        decay_fn = [make_learning_rate_decay_fn(optim_opt), 
-            make_learning_rate_decay_fn(optim_opt)]
+        learning_rates = [
+            optim_opt["learning_rate_bert"], 
+            optim_opt["learning_rate_task"]
+        ]
+        decay_fn = [
+            make_learning_rate_decay_fn(optim_opt['decay_method_bert'], 
+                                        optim_opt['train_steps'],
+                                        warmup_steps=optim_opt['warmup_steps'],
+                                        decay_exp=optim_opt['decay_exp']), 
+            make_learning_rate_decay_fn(optim_opt['decay_method_task'], 
+                                        optim_opt['train_steps'],
+                                        warmup_steps=optim_opt['warmup_steps'],
+                                        decay_exp=optim_opt['decay_exp']), 
+        ]
         optimizer = cls(
             build_torch_optimizer(model, optim_opt),
             learning_rates,

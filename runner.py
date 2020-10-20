@@ -25,8 +25,6 @@ parser.add_argument('model', type=str,
                     help='model name to train or test')
 parser.add_argument('mode', type=str,
                     help='train or eval')
-parser.add_argument('--log_dir', type=str, default='logs', 
-                    help='dir of training log')
 
 
 class Runner:
@@ -44,8 +42,8 @@ class Runner:
         if self.config["max_ckpt_to_keep"] > 0:
             self.checkpoint_queue = deque([], maxlen=config["max_ckpt_to_keep"])
 
-        if not self.config['debugging']:
-            self.writer = TensorboardWriter(config["log_dir"])
+        # if not self.config['debugging']:
+        self.writer = TensorboardWriter(config["log_dir"])
 
     @staticmethod
     def compute_ant_loss(
@@ -196,7 +194,8 @@ class Runner:
 
             self.model.train()
 
-            avg_epoch_loss = 0.
+            running_loss = 0.
+            running_batch_num = 0
             batch_num = 0
             next_logging_pct = .5
             next_evaluating_pct = self.config["next_evaluating_pct"] + .5
@@ -205,6 +204,7 @@ class Runner:
             for example_idx, input_tensors, dialog_info in data_loaders['train']:
                 input_tensors = [t.cuda() for t in input_tensors]
                 batch_num += 1
+                running_batch_num += 1
                 pct = batch_num / len(data_loaders['train']) * 100
 
                 self.optimizer.zero_grad()
@@ -256,10 +256,8 @@ class Runner:
                     full_fast_ant_scores_of_spans, full_ant_mask_of_spans
                 )
 
-                loss = ant_loss
-
-                avg_epoch_loss += loss.item()
-                loss.backward()
+                running_loss += ant_loss.item()
+                ant_loss.backward()
 
                 self.optimizer.step()
 
@@ -267,21 +265,23 @@ class Runner:
                     na_str = 'N/A'
 
                     print(
-                        f'{int(pct)}%, time: {time.time() - start_time:.2f} avg_epoch_loss: {avg_epoch_loss / batch_num:.4f}'
+                        f'{int(pct)}%, time: {time.time() - start_time:.2f} running_loss: {running_loss / running_batch_num:.4f}'
                     )
 
                     next_logging_pct += self.config["next_logging_pct"]
 
-                    iter_now = int(len(data_loaders['train']) * (epoch_idx + pct / 100))
-                    if not self.config['debugging']:
-                        self.writer.add_scalar('Train/loss', avg_epoch_loss / batch_num, iter_now)
-                        bert_lr, task_lr = self.optimizer.learning_rate()
-                        self.writer.add_scalar('Train/lr_bert', bert_lr, iter_now)
-                        self.writer.add_scalar('Train/lr_task', task_lr, iter_now)
+                    iter_now = len(data_loaders['train']) * epoch_idx + batch_num
+                    # if not self.config['debugging']:
+                    self.writer.add_scalar('Train/loss', running_loss / running_batch_num, iter_now)
+                    bert_lr, task_lr = self.optimizer.learning_rate()
+                    self.writer.add_scalar('Train/lr_bert', bert_lr, iter_now)
+                    self.writer.add_scalar('Train/lr_task', task_lr, iter_now)
 
+                    running_loss = 0.
+                    running_batch_num = 0
 
                 if pct >= next_evaluating_pct:
-                    iter_now = int(len(data_loaders['train']) * (epoch_idx + pct / 100))
+                    iter_now = len(data_loaders['train']) * epoch_idx + batch_num
                     avg_f1 = self.evaluate(data_loaders['eval'], iter_now)
 
                     if avg_f1 > self.max_f1:
@@ -290,21 +290,18 @@ class Runner:
 
                         ckpt_path = self.save_ckpt_best()
 
+                    self.writer.add_scalar('Val/pronoun coref f1 best', self.max_f1, iter_now)
                     next_evaluating_pct += self.config["next_evaluating_pct"]
 
-                    # debug
-                    # ckpt_path = self.save_ckpt()
-
-            avg_epoch_loss /= batch_num
 
             na_str = 'N/A'
 
             print(
-                f'100%,\ttime:\t{time.time() - start_time:.2f} avg_epoch_loss:\t{avg_epoch_loss:.4f}'
+                f'100%,\ttime:\t{time.time() - start_time:.2f}'
             )
 
 
-            iter_now = int(len(data_loaders['train']) * (epoch_idx + pct / 100))
+            iter_now = len(data_loaders['train']) * (epoch_idx + 1)
             avg_f1 = self.evaluate(data_loaders['eval'], iter_now)
             ckpt_path = self.save_ckpt()
 
@@ -321,7 +318,9 @@ class Runner:
                 best_ckpt_path = ckpt_path.replace(f'{self.epoch_idx}.ckpt', 'best.ckpt')
                 shutil.copyfile(ckpt_path, best_ckpt_path)
                 print(f'Saving {best_ckpt_path}.')
+                self.writer.add_scalar('Val/pronoun coref f1 best', self.max_f1, iter_now)
             elif epoch_idx - self.max_f1_epoch_idx > self.config["early_stop_epoch"]:
+                self.writer.add_scalar('Val/pronoun coref f1 best', self.max_f1, iter_now)
                 print('Early stop.')
                 break
 
@@ -330,12 +329,13 @@ class Runner:
         # from collections import Counter
         # span_len_cnts = Counter()
 
+        self.model.eval()
+
         with torch.no_grad():
             print('evaluating')
             evaluator = metrics.CorefEvaluator()
             pr_coref_evaluator = metrics.PrCorefEvaluator()
 
-            self.model.eval()
             batch_num = 0
             avg_loss = 0.
             next_logging_pct = 20.
@@ -450,39 +450,41 @@ class Runner:
                     )
                     next_logging_pct += 5.
 
-            epoch_precision, epoch_recall, epoch_f1 = evaluator.get_prf()
-            avg_loss = avg_loss / batch_num
+        self.model.train()
 
-            na_str = 'N/A'
+        epoch_precision, epoch_recall, epoch_f1 = evaluator.get_prf()
+        avg_loss = avg_loss / batch_num
 
-            print(
-                f'avg_valid_time:\t{time.time() - start_time:.2f}\n'
-                f'avg loss:\t{avg_loss:.4f}\n'
-                f'Coref average precision:\t{epoch_precision:.4f}\n'
-                f'Coref average recall:\t{epoch_recall:.4f}\n'
-                f'Coref average f1:\t{epoch_f1:.4f}\n'
-            )
+        na_str = 'N/A'
 
-            if not self.config['debugging']:
-                self.writer.add_scalar('Val/loss', avg_loss, iter_now)
-                self.writer.add_scalar('Val/coref precision', epoch_precision, iter_now)
-                self.writer.add_scalar('Val/coref recall', epoch_recall, iter_now)
-                self.writer.add_scalar('Val/coref f1', epoch_f1, iter_now)
+        print(
+            f'avg_valid_time:\t{time.time() - start_time:.2f}\n'
+            f'avg loss:\t{avg_loss:.4f}\n'
+            f'Coref average precision:\t{epoch_precision:.4f}\n'
+            f'Coref average recall:\t{epoch_recall:.4f}\n'
+            f'Coref average f1:\t{epoch_f1:.4f}\n'
+        )
 
-            pr_coref_results = pr_coref_evaluator.get_prf()
+        # if not self.config['debugging']:
+        self.writer.add_scalar('Val/loss', avg_loss, iter_now)
+        self.writer.add_scalar('Val/coref precision', epoch_precision, iter_now)
+        self.writer.add_scalar('Val/coref recall', epoch_recall, iter_now)
+        self.writer.add_scalar('Val/coref f1', epoch_f1, iter_now)
 
-            print(
-                f'Pronoun Coref average precision:\t{pr_coref_results["p"]:.4f}\n'
-                f'Pronoun Coref average recall:\t{pr_coref_results["r"]:.4f}\n'
-                f'Pronoun Coref average f1:\t{pr_coref_results["f"]:.4f}\n'
-            )
+        pr_coref_results = pr_coref_evaluator.get_prf()
 
-            if not self.config['debugging']:
-                self.writer.add_scalar('Val/pronoun coref precision', pr_coref_results['p'], iter_now)
-                self.writer.add_scalar('Val/pronoun coref recall', pr_coref_results['r'], iter_now)
-                self.writer.add_scalar('Val/pronoun coref f1', pr_coref_results['f'], iter_now)
+        print(
+            f'Pronoun Coref average precision:\t{pr_coref_results["p"]:.4f}\n'
+            f'Pronoun Coref average recall:\t{pr_coref_results["r"]:.4f}\n'
+            f'Pronoun Coref average f1:\t{pr_coref_results["f"]:.4f}\n'
+        )
 
-            return pr_coref_results['f']
+        # if not self.config['debugging']:
+        self.writer.add_scalar('Val/pronoun coref precision', pr_coref_results['p'], iter_now)
+        self.writer.add_scalar('Val/pronoun coref recall', pr_coref_results['r'], iter_now)
+        self.writer.add_scalar('Val/pronoun coref f1', pr_coref_results['f'], iter_now)
+
+        return pr_coref_results['f']
 
     def get_ckpt(self):
         return {
@@ -574,9 +576,9 @@ if __name__ == '__main__':
     np.random.seed(config['random_seed'])
 
     # set log file
-    config["log_dir"] = os.path.join(args.log_dir, args.model)
-    if not os.path.exists(config["log_dir"]):
-      os.makedirs(config["log_dir"])
+    # config["log_dir"] = os.path.join(args.log_dir, args.model)
+    # if not os.path.exists(config["log_dir"]):
+    #   os.makedirs(config["log_dir"])
     
     log_file = os.path.join(config["log_dir"], f'{args.mode}.log')
     set_log_file(log_file)    
@@ -603,13 +605,13 @@ if __name__ == '__main__':
             shuffle=(split == 'train' and config['training']),
             # pin_memory=True,
             collate_fn=PrpDataset.collate_fn,
-            num_workers=4
+            num_workers=0 if config['debugging'] else 4
         )
         for split in splits
     }
     if not config['validating']:
         config['train_steps'] = len(datasets['train']) * config['num_epochs']
-        config['warmup_steps'] = config['train_steps'] * 0.1
+        config['warmup_steps'] = int(config['train_steps'] * config['warmup_ratio'])
 
     runner = Runner(config)
 
