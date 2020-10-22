@@ -17,7 +17,10 @@ class Model(nn.Module):
         self.num_dist_buckets = 10
 
         from transformers import AutoModel
-        self.encoder = AutoModel.from_pretrained('bert-base-uncased', cache_dir=self.config['bert_cache_dir'])
+        if self.config['bert_cased']:
+            self.encoder = AutoModel.from_pretrained('bert-base-cased', cache_dir=self.config['bert_cache_dir'])
+        else:
+            self.encoder = AutoModel.from_pretrained('bert-base-uncased', cache_dir=self.config['bert_cache_dir'])
 
         self.span_width_embedder = nn.Sequential(
             nn.Embedding(
@@ -32,31 +35,68 @@ class Model(nn.Module):
         )
 
         span_embedding_dim = self.config['span_embedding_dim'] * 3 + self.config['feature_size']
-        self.mention_scorer = nn.Sequential(
-            nn.Linear(span_embedding_dim, self.config['ffnn_size']),
-            nn.ReLU(),
-            nn.Dropout(self.config['dropout_prob']),
-            # nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
-            # nn.ReLU(),
-            # nn.Dropout(self.config['dropout_prob']),
-            nn.Linear(self.config['ffnn_size'], 1),
-            Squeezer(dim=-1)
-        )
+        mention_scorer = [
+                          nn.Linear(span_embedding_dim, self.config['ffnn_size']),
+                          nn.ReLU(),
+                          nn.Dropout(self.config['dropout_prob']),
+                          ]
 
-        self.span_width_scorer = nn.Sequential(
-            nn.Embedding(
-                num_embeddings=self.config['max_span_width'],
-                embedding_dim=self.config['feature_size']
-            ),
-            nn.Linear(self.config['feature_size'], self.config['ffnn_size']),
-            nn.ReLU(),
-            nn.Dropout(self.config['dropout_prob']),
-            # nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
-            # nn.ReLU(),
-            # nn.Dropout(self.config['dropout_prob']),
-            nn.Linear(self.config['ffnn_size'], 1),
-            Squeezer(dim=-1)
-        )
+        for _ in range(1, self.config['mention_scorer_depth']):
+            mention_scorer.extend([
+                                  nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
+                                  nn.ReLU(),
+                                  nn.Dropout(self.config['dropout_prob']),
+                                  ])
+        mention_scorer.extend([
+                              nn.Linear(self.config['ffnn_size'], 1),
+                              Squeezer(dim=-1)
+                              ])
+        self.mention_scorer = nn.Sequential(*mention_scorer)
+        # self.mention_scorer = nn.Sequential(
+        #     nn.Linear(span_embedding_dim, self.config['ffnn_size']),
+        #     nn.ReLU(),
+        #     nn.Dropout(self.config['dropout_prob']),
+        #     # nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
+        #     # nn.ReLU(),
+        #     # nn.Dropout(self.config['dropout_prob']),
+        #     nn.Linear(self.config['ffnn_size'], 1),
+        #     Squeezer(dim=-1)
+        # )
+
+        span_width_scorer = [
+                             nn.Embedding(
+                                 num_embeddings=self.config['max_span_width'],
+                                 embedding_dim=self.config['feature_size']
+                             ),
+                             nn.Linear(self.config['feature_size'], self.config['ffnn_size']),
+                             nn.ReLU(),
+                             nn.Dropout(self.config['dropout_prob']),
+                             ]
+        for _ in range(1, self.config['span_width_scorer_depth']):
+            span_width_scorer.extend([
+                                     nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
+                                     nn.ReLU(),
+                                     nn.Dropout(self.config['dropout_prob']),
+                                     ])
+        span_width_scorer.extend([
+                                 nn.Linear(self.config['ffnn_size'], 1),
+                                 Squeezer(dim=-1)
+                                 ])
+        self.span_width_scorer = nn.Sequential(*span_width_scorer)
+        # self.span_width_scorer = nn.Sequential(
+        #     nn.Embedding(
+        #         num_embeddings=self.config['max_span_width'],
+        #         embedding_dim=self.config['feature_size']
+        #     ),
+        #     nn.Linear(self.config['feature_size'], self.config['ffnn_size']),
+        #     nn.ReLU(),
+        #     nn.Dropout(self.config['dropout_prob']),
+        #     # nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
+        #     # nn.ReLU(),
+        #     # nn.Dropout(self.config['dropout_prob']),
+        #     nn.Linear(self.config['ffnn_size'], 1),
+        #     Squeezer(dim=-1)
+        # )
 
         self.ant_distance_scorer = nn.Sequential(
             nn.Embedding(
@@ -65,7 +105,7 @@ class Model(nn.Module):
             ),
             nn.Dropout(self.config['dropout_prob']),
             nn.Linear(self.config['feature_size'], 1),
-            Squeezer(dim=-1) # TODO here
+            Squeezer(dim=-1)
         )        
 
         self.src_span_projector = nn.Linear(
@@ -88,16 +128,32 @@ class Model(nn.Module):
         )
 
         pair_embedding_dim = (span_embedding_dim + self.config['feature_size']) * 3
-        self.slow_ant_scorer = nn.Sequential(
-            nn.Linear(pair_embedding_dim, self.config['ffnn_size']),
-            nn.ReLU(),
-            nn.Dropout(self.config['dropout_prob']),
-            # nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
-            # nn.ReLU(),
-            # nn.Dropout(self.config['dropout_prob']),
-            nn.Linear(self.config['ffnn_size'], 1),
-            Squeezer(dim=-1)
-        )
+        slow_ant_scorer = [
+                           nn.Linear(pair_embedding_dim, self.config['ffnn_size']),
+                           nn.ReLU(),
+                           nn.Dropout(self.config['dropout_prob']),
+                           ]
+        for _ in range(1, self.config['slow_ant_scorer_depth']):
+            slow_ant_scorer.extend([
+                                   nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
+                                   nn.ReLU(),
+                                   nn.Dropout(self.config['dropout_prob']),
+                                   ])
+        slow_ant_scorer.extend([
+                               nn.Linear(self.config['ffnn_size'], 1),
+                               Squeezer(dim=-1)
+                               ])
+        self.slow_ant_scorer = nn.Sequential(*slow_ant_scorer)
+        # self.slow_ant_scorer = nn.Sequential(
+        #     nn.Linear(pair_embedding_dim, self.config['ffnn_size']),
+        #     nn.ReLU(),
+        #     nn.Dropout(self.config['dropout_prob']),
+        #     # nn.Linear(self.config['ffnn_size'], self.config['ffnn_size']),
+        #     # nn.ReLU(),
+        #     # nn.Dropout(self.config['dropout_prob']),
+        #     nn.Linear(self.config['ffnn_size'], 1),
+        #     Squeezer(dim=-1)
+        # )
 
         self.attended_span_embedding_gate = nn.Sequential(
             nn.Linear(span_embedding_dim * 2, span_embedding_dim),
@@ -525,7 +581,6 @@ class Model(nn.Module):
             ), dim=-1
         )
 
-        # print(pair_embeddings_of_spans.shape)
         # [top_span_num, pruned_ant_num]
         slow_ant_scores_of_spans = self.slow_ant_scorer(pair_embeddings_of_spans)
         # [top_span_num, pruned_ant_num]
@@ -557,7 +612,7 @@ class Model(nn.Module):
         antecedent_distance_scores = distance_scores[antecedent_distance_buckets]
         full_fast_ant_scores_of_spans += antecedent_distance_scores
 
-        # [top_span_num, pruned_ant_num]
+        # [top_span_num, pruned_ant_num] on cuda
         _, top_ant_idxes_of_spans = torch.topk(
             # [top_span_num, top_span_num]
             full_fast_ant_scores_of_spans, k=pruned_ant_num, dim=-1, sorted=False
@@ -586,25 +641,15 @@ class Model(nn.Module):
         # [top_cand_num, span_embedding_dim]
         top_span_embeddings
     ):
-        # # print(top_span_embeddings.shape)
-        # top_span_embeddings = top_span_embeddings.cuda(1)
         # [top_cand_num, span_embedding_dim]
         top_src_span_embeddings = F.dropout(
             self.src_span_projector(top_span_embeddings),
-            p=self.config['dropout_prob'], training=self.training
+            p=self.config['fast_ant_score_dropout_prob'], training=self.training
         )
         # [top_cand_num, span_embedding_dim]
-        top_tgt_span_embeddings = F.dropout(top_span_embeddings, p=self.config['dropout_prob'], training=self.training)
+        top_tgt_span_embeddings = F.dropout(top_span_embeddings, p=self.config['fast_ant_score_dropout_prob'], training=self.training)
         # [top_span_num, top_span_num] = # [top_cand_num, span_embedding_dim] @ [span_embedding_dim, top_cand_num]
         return top_src_span_embeddings @ top_tgt_span_embeddings.t()
-
-        # # [top_span_num, top_span_num]
-        # return (
-        #         F.dropout(
-        #             top_span_embeddings @ self.fast_ant_scoring_mat,
-        #
-        #         ) @ F.dropout(top_span_embeddings, p=self.config['dropout_prob'], training=self.training).t()
-        # ).cuda()
 
 
     def flatten_emb_by_sentence(self, emb, text_len_mask):

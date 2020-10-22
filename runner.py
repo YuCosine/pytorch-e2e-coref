@@ -8,10 +8,12 @@ import subprocess
 import numpy as np
 import random
 from itertools import chain
+import argparse
+import pyhocon
+
 import torch
 from torch import nn, optim
 import torch.utils.data as tud
-import argparse
 
 from model import Model
 from util import initialize_from_env, set_log_file, TensorboardWriter
@@ -24,7 +26,7 @@ parser = argparse.ArgumentParser(description='train or test model')
 parser.add_argument('model', type=str,
                     help='model name to train or test')
 parser.add_argument('mode', type=str,
-                    help='train or eval')
+                    help='train, eval or debug')
 
 
 class Runner:
@@ -290,7 +292,7 @@ class Runner:
 
                         ckpt_path = self.save_ckpt_best()
 
-                    self.writer.add_scalar('Val/pronoun coref f1 best', self.max_f1, iter_now)
+                    self.writer.add_scalar('Val/pronoun_coref_f1_best', self.max_f1, iter_now)
                     next_evaluating_pct += self.config["next_evaluating_pct"]
 
 
@@ -303,6 +305,10 @@ class Runner:
 
             iter_now = len(data_loaders['train']) * (epoch_idx + 1)
             avg_f1 = self.evaluate(data_loaders['eval'], iter_now)
+            if avg_f1 > self.max_f1:
+                self.max_f1 = avg_f1
+                self.max_f1_epoch_idx = epoch_idx + 1
+            self.writer.add_scalar('Val/pronoun_coref_f1_best', self.max_f1, iter_now)
             ckpt_path = self.save_ckpt()
 
             if self.config["max_ckpt_to_keep"] > 0:
@@ -312,15 +318,10 @@ class Runner:
                 self.checkpoint_queue.append(ckpt_path)
 
             if avg_f1 > self.max_f1:
-                self.max_f1 = avg_f1
-                self.max_f1_epoch_idx = epoch_idx + 1
-
                 best_ckpt_path = ckpt_path.replace(f'{self.epoch_idx}.ckpt', 'best.ckpt')
                 shutil.copyfile(ckpt_path, best_ckpt_path)
                 print(f'Saving {best_ckpt_path}.')
-                self.writer.add_scalar('Val/pronoun coref f1 best', self.max_f1, iter_now)
             elif epoch_idx - self.max_f1_epoch_idx > self.config["early_stop_epoch"]:
-                self.writer.add_scalar('Val/pronoun coref f1 best', self.max_f1, iter_now)
                 print('Early stop.')
                 break
 
@@ -467,22 +468,22 @@ class Runner:
 
         # if not self.config['debugging']:
         self.writer.add_scalar('Val/loss', avg_loss, iter_now)
-        self.writer.add_scalar('Val/coref precision', epoch_precision, iter_now)
-        self.writer.add_scalar('Val/coref recall', epoch_recall, iter_now)
-        self.writer.add_scalar('Val/coref f1', epoch_f1, iter_now)
+        self.writer.add_scalar('Val/coref_precision', epoch_precision, iter_now)
+        self.writer.add_scalar('Val/coref_recall', epoch_recall, iter_now)
+        self.writer.add_scalar('Val/coref_f1', epoch_f1, iter_now)
 
         pr_coref_results = pr_coref_evaluator.get_prf()
 
         print(
-            f'Pronoun Coref average precision:\t{pr_coref_results["p"]:.4f}\n'
-            f'Pronoun Coref average recall:\t{pr_coref_results["r"]:.4f}\n'
-            f'Pronoun Coref average f1:\t{pr_coref_results["f"]:.4f}\n'
+            f'Pronoun_Coref_average_precision:\t{pr_coref_results["p"]:.4f}\n'
+            f'Pronoun_Coref_average_recall:\t{pr_coref_results["r"]:.4f}\n'
+            f'Pronoun_Coref_average_f1:\t{pr_coref_results["f"]:.4f}\n'
         )
 
         # if not self.config['debugging']:
-        self.writer.add_scalar('Val/pronoun coref precision', pr_coref_results['p'], iter_now)
-        self.writer.add_scalar('Val/pronoun coref recall', pr_coref_results['r'], iter_now)
-        self.writer.add_scalar('Val/pronoun coref f1', pr_coref_results['f'], iter_now)
+        self.writer.add_scalar('Val/pronoun_coref_precision', pr_coref_results['p'], iter_now)
+        self.writer.add_scalar('Val/pronoun_coref_recall', pr_coref_results['r'], iter_now)
+        self.writer.add_scalar('Val/pronoun_coref_f1', pr_coref_results['f'], iter_now)
 
         return pr_coref_results['f']
 
@@ -535,7 +536,7 @@ class Runner:
         return ckpt_path
 
     def save_ckpt_best(self):
-        ckpt_path = f'{self.config["log_dir"]}/best.ckpt'
+        ckpt_path = f'{self.config["log_dir"]}/epoch_best.ckpt'
         print(f'saving checkpoint {ckpt_path}')
         torch.save(self.ckpt, f=ckpt_path)
         return ckpt_path
@@ -581,7 +582,8 @@ if __name__ == '__main__':
     #   os.makedirs(config["log_dir"])
     
     log_file = os.path.join(config["log_dir"], f'{args.mode}.log')
-    set_log_file(log_file)    
+    set_log_file(log_file)
+    print(pyhocon.HOCONConverter.convert(config, "hocon"))
 
     config['training'] = args.mode == 'train'
     config['validating'] = args.mode == 'eval'

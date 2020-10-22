@@ -46,9 +46,15 @@ def initialize_from_env(eval_test=False):
         os.makedirs(config["log_dir"])
     print(f"Results saved to {config['log_dir']}")
 
+    if config["bert_cased"]:
+        print('Using cased BERT.')
+        config['train_path'] = config['train_path'].replace('.jsonlines', '.cased.jsonlines')
+        config['val_path'] = config['val_path'].replace('.jsonlines', '.cased.jsonlines')
+        config['test_path'] = config['test_path'].replace('.jsonlines', '.cased.jsonlines')
+
     config['timestamp'] = datetime.datetime.now().strftime('%m%d-%H%M%S')
 
-    print(pyhocon.HOCONConverter.convert(config, "hocon"))
+    # print(pyhocon.HOCONConverter.convert(config, "hocon"))
     return config
 
 

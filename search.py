@@ -88,14 +88,14 @@ if __name__ == '__main__':
     num_task_each_gpu = args.num_task_each_gpu
     params = list()
 
-    for exp in itertools.product(['ep10', 'ep8', 'ep6'], ['blr5', 'blr2', 'blr1'], ['dp3', 'dp4', 'dp5', 'dp6']):
-        exp = '_'.join(exp)
+    # for exp in itertools.product(['ep10', 'ep8', 'ep6'], ['blr5', 'blr2', 'blr1'], ['dp3', 'dp4', 'dp5', 'dp6']):
+    #     exp = '_'.join(exp)
+    for exp in ['fdp5', 'fdp7', 'sasd2_fdp5', 'sasd2_fdp7', 'cased', 'cased_sasd2', 'cased_fdp5', 'cased_fdp7', 'cased_sasd2_fdp5', 'cased_sasd2_fdp7']:
         param = OrderedDict()
         param['script'] = 'runner.py'
         param['model'] = exp
         param['mode'] = 'train'
         params.append(param)
-        
 
     if args.mode == 'predict':
         for i in range(len(params)):

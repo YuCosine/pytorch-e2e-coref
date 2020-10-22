@@ -40,7 +40,10 @@ class PrpDataset(tud.Dataset):
         self.genre_to_id = {genre: id_ for id_, genre in enumerate(self.config['id_to_genre'])}
         self.examples = [json.loads(line) for line in open(self.config[f'{name}_path'])]
         from transformers import AutoTokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", cache_dir=self.config['bert_cache_dir'])
+        if self.config['bert_cased']:
+            self.tokenizer = AutoTokenizer.from_pretrained("bert-base-cased", cache_dir=self.config['bert_cache_dir'])
+        else:
+            self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", cache_dir=self.config['bert_cache_dir'])
 
     def __len__(self):
         return len(self.examples)
@@ -104,7 +107,7 @@ class PrpDataset(tud.Dataset):
             sent_input_ids = self.tokenizer.convert_tokens_to_ids(sentence)
             sent_len = len(sent_input_ids)
             sent_input_mask = [1] * sent_len
-            sent_speaker_ids = [speaker_dict.get(s, 3) for s in speaker]
+            sent_speaker_ids = [speaker_dict.get(s, 0) for s in speaker]
             sent_input_ids.extend([0] * (max_sentence_length - sent_len))
             sent_input_mask.extend([0] * (max_sentence_length - sent_len))
             sent_speaker_ids.extend([0] * (max_sentence_length - sent_len))
@@ -162,6 +165,7 @@ class PrpDataset(tud.Dataset):
         candidate_ends = (candidate_starts + torch.arange(self.config['max_span_width']).view(1, -1)).view(-1)
 
         sentence_indices = torch.tensor(example['sentence_map'])
+
         # remove cands with cand_ends >= num_words
         # [num_words * max_span_width]
         candidate_starts = candidate_starts.view(-1)
@@ -176,14 +180,13 @@ class PrpDataset(tud.Dataset):
         # [cand_num]
         cand_cluster_ids = cand_cluster_ids[cand_mask]
 
+        # remove cands whose start and end not in the same sentences
         # [cand_num]
         cand_start_sent_idxes = sentence_indices[candidate_starts]
         # [cand_num]
         cand_end_sent_idxes = sentence_indices[candidate_ends]
         # [cand_num]
         cand_mask = (cand_start_sent_idxes == cand_end_sent_idxes)
-
-        # remove cands whose start and end not in the same sentences
         # [cand_num]
         candidate_starts = candidate_starts[cand_mask]
         # [cand_num]

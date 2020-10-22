@@ -8,7 +8,7 @@ import re
 from tqdm import tqdm
 import argparse
 parser = argparse.ArgumentParser(description='turn jsonlines into bert format')
-parser.add_argument('--dataset', type=str, default='vispro',
+parser.add_argument('--dataset', type=str, default='vispro.1.0',
                     help='dataset to transform: vispro, mscoco, neg, cap, conll, medical, nn, vispro.pool, vispro.1.0, visprp')
 parser.add_argument('--max_seg_len', type=int, default=512, 
                     help='max segment len')
