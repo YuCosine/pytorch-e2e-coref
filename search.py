@@ -91,7 +91,7 @@ if __name__ == '__main__':
     # for exp in itertools.product(['ep10', 'ep8', 'ep6'], ['blr5', 'blr2', 'blr1'], ['dp3', 'dp4', 'dp5', 'dp6']):
     #     exp = '_'.join(exp)
     # for exp in ['sasd2_fdp5_aw', 'msd2_fdp5_aw', 'msd2_sasd2_fdp5_aw']:
-    for exp in ['sasd2_fdp5_aw_1', 'sasd2_fdp5_aw_2']:
+    for exp in ['fdp5_cd3', 'sasd2_fdp5_cd3', 'msd2_fdp5_cd3', 'msd2_sasd2_fdp5_cd3']:
         param = OrderedDict()
         param['script'] = 'runner.py'
         param['model'] = exp
