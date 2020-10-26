@@ -596,6 +596,7 @@ if __name__ == '__main__':
         splits = {'eval': 'val'}
     elif config['debugging']:
         splits = {'train': 'val', 'eval': 'test'}
+        config['num_epochs'] += 1
     datasets = {
         split: PrpDataset(splits[split], config)
         for split in splits

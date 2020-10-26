@@ -16,11 +16,24 @@ from torchvision import transforms
 import torch.nn.utils.rnn as rnn_utils
 
 
-def init_params(module):
+def truncated_normal_(tensor, mean=0, std=1):
+    size = tensor.shape
+    tmp = tensor.new_empty(size + (4,)).normal_()
+    valid = (tmp < 2) & (tmp > -2)
+    ind = valid.max(-1, keepdim=True)[1]
+    tensor.data.copy_(tmp.gather(-1, ind).squeeze(-1))
+    tensor.data.mul_(std).add_(mean)
+
+
+def init_params(module, initializer='normal'):
 
     if isinstance(module, nn.Linear):
-        # nn.init.kaiming_normal_(module.weight.data)
-        nn.init.normal_(module.weight.data, std=0.02)
+        if initializer == 'kaiming_normal':
+            nn.init.kaiming_normal_(module.weight.data)
+        elif initializer == 'normal':
+            nn.init.normal_(module.weight.data, std=0.02)
+        elif initializer == 'truncated_normal':
+            truncated_normal_(module.weight.data, std=0.02)
 
         if module.bias is not None:
             nn.init.zeros_(module.bias.data)
@@ -28,9 +41,12 @@ def init_params(module):
         # print('initialized Linear')
 
     elif isinstance(module, nn.Embedding):
-        # nn.init.kaiming_normal_(module.weight.data)
-        nn.init.normal_(module.weight.data, std=0.02)
-
+        if initializer == 'kaiming_normal':
+            nn.init.kaiming_normal_(module.weight.data)
+        elif initializer == 'normal':
+            nn.init.normal_(module.weight.data, std=0.02)
+        elif initializer == 'truncated_normal':
+            truncated_normal_(module.weight.data, std=0.02)
 
     elif isinstance(module, nn.Conv2d) or isinstance(module, nn.Conv1d):
         nn.init.kaiming_normal_(module.weight, mode='fan_out')

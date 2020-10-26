@@ -1,7 +1,7 @@
 from model_utils import init_params, build_len_mask_batch
 from modules import Squeezer
 import math
-from functools import cmp_to_key
+from functools import cmp_to_key, partial
 import time
 
 import torch
@@ -166,7 +166,7 @@ class Model(nn.Module):
     def init_params(self):
         for name, module in self.named_children():
             if 'encoder' not in name:
-                module.apply(init_params)
+                module.apply(partial(init_params, initializer=self.config['initializer']))
 
     def get_trainable_params(self):
         yield from filter(lambda param: param.requires_grad, self.parameters())
