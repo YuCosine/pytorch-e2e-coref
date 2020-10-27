@@ -112,6 +112,8 @@ def build_torch_optimizer(model, config):
         else:
             param_type = 'task'
         for param_name, param in module.named_parameters():
+            if module_name == 'encoder' and not param_name.startswith('encoder.layer'):
+                continue
             if param.requires_grad:
                 if any(ex in param_name for ex in exclude_from_weight_decay):
                     params[param_type] += [

@@ -330,7 +330,6 @@ class Runner:
         # from collections import Counter
         # span_len_cnts = Counter()
 
-        self.load_ckpt()
 
         self.model.eval()
 
@@ -623,4 +622,5 @@ if __name__ == '__main__':
     if config['training'] or config['debugging']:
         runner.train(data_loaders)
     elif config['validating']:
+        runner.load_ckpt()
         runner.evaluate(data_loaders['eval'])
