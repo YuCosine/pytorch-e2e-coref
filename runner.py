@@ -330,6 +330,8 @@ class Runner:
         # from collections import Counter
         # span_len_cnts = Counter()
 
+        self.load_ckpt()
+
         self.model.eval()
 
         with torch.no_grad():
@@ -517,7 +519,7 @@ class Runner:
         print('loaded model')
         del model_state_dict
 
-        if not (self.config['uses_new_optimizer'] or self.config['sets_new_lr']):
+        if not self.config['validating'] and not (self.config['uses_new_optimizer'] or self.config['sets_new_lr']):
             #     if ckpt_dict['embedder_optimizer'] and not self.config['freezes_embeddings']:
             #         self.embedder_optimizer.load_state_dict(ckpt_dict['embedder_optimizer'])
             self.optimizer.load_state_dict(ckpt_dict['optimizer'])
@@ -543,8 +545,8 @@ class Runner:
 
     def load_ckpt(self, ckpt_path=None):
         if not ckpt_path:
-            if self.config['loads_best_ckpt']:
-                ckpt_path = f'{self.config["log_dir"]}/best.ckpt'
+            if self.config['validating'] or self.config['loads_best_ckpt']:
+                ckpt_path = f'{self.config["log_dir"]}/epoch_best.ckpt'
             else:
                 ckpt_paths = [path for path in os.listdir(f'{self.config["log_dir"]}/') if path.endswith('.ckpt') and 'best' not in path]
                 if len(ckpt_paths) == 0:
