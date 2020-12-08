@@ -196,7 +196,7 @@ class PrpDataset(tud.Dataset):
 
         dialog_info = [
             example['clusters'], 
-            example['doc_key'], 
+            example['image_id'], 
             example['pronoun_info'], 
             example['sentences']
         ]

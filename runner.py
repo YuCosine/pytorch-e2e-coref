@@ -1,5 +1,7 @@
 import os
+import os.path as osp
 import sys
+import json
 from collections import deque
 import time
 import re
@@ -10,6 +12,7 @@ import random
 from itertools import chain
 import argparse
 import pyhocon
+import glog as log
 
 import torch
 from torch import nn, optim
@@ -44,8 +47,8 @@ class Runner:
         if self.config["max_ckpt_to_keep"] > 0:
             self.checkpoint_queue = deque([], maxlen=config["max_ckpt_to_keep"])
 
-        # if not self.config['debugging']:
-        self.writer = TensorboardWriter(config["log_dir"])
+        if not self.config['validating']:
+            self.writer = TensorboardWriter(config["log_dir"])
 
     @staticmethod
     def compute_ant_loss(
@@ -172,7 +175,7 @@ class Runner:
     def test_gpu(self, dataset):
         example_idx, input_tensors = dataset[0]
         loss = self.model.compute_loss(input_tensors)
-        print(loss.item())
+        log.info(loss.item())
         self.optimizer.zero_grad()
         # torch.cuda.empty_cache()
         loss.backward()
@@ -191,8 +194,8 @@ class Runner:
         for epoch_idx in range(start_epoch_idx, self.config['num_epochs']):
             self.epoch_idx = epoch_idx
 
-            print(f'starting epoch {epoch_idx}')
-            print('training')
+            log.info(f'starting epoch {epoch_idx}')
+            log.info('training')
 
             self.model.train()
 
@@ -211,7 +214,7 @@ class Runner:
 
                 self.optimizer.zero_grad()
 
-                # print(example_idx)
+                # log.info(example_idx)
                 (
                     # [cand_num]
                     cand_mention_scores,
@@ -266,7 +269,7 @@ class Runner:
                 if pct >= next_logging_pct:
                     na_str = 'N/A'
 
-                    print(
+                    log.info(
                         f'{int(pct)}%, time: {time.time() - start_time:.2f} running_loss: {running_loss / running_batch_num:.4f}'
                     )
 
@@ -284,7 +287,7 @@ class Runner:
 
                 if pct >= next_evaluating_pct:
                     iter_now = len(data_loaders['train']) * epoch_idx + batch_num
-                    avg_f1 = self.evaluate(data_loaders['eval'], iter_now)
+                    avg_f1 = self.evaluate(data_loaders['val'], iter_now)[0]
 
                     if avg_f1 > self.max_f1:
                         self.max_f1 = avg_f1
@@ -298,13 +301,13 @@ class Runner:
 
             na_str = 'N/A'
 
-            print(
+            log.info(
                 f'100%,\ttime:\t{time.time() - start_time:.2f}'
             )
 
 
             iter_now = len(data_loaders['train']) * (epoch_idx + 1)
-            avg_f1 = self.evaluate(data_loaders['eval'], iter_now)
+            avg_f1 = self.evaluate(data_loaders['val'], iter_now)[0]
             if avg_f1 > self.max_f1:
                 self.max_f1 = avg_f1
                 self.max_f1_epoch_idx = epoch_idx + 1
@@ -320,13 +323,13 @@ class Runner:
             if avg_f1 > self.max_f1:
                 best_ckpt_path = ckpt_path.replace(f'{self.epoch_idx}.ckpt', 'best.ckpt')
                 shutil.copyfile(ckpt_path, best_ckpt_path)
-                print(f'Saving {best_ckpt_path}.')
+                log.info(f'Saving {best_ckpt_path}.')
             elif epoch_idx - self.max_f1_epoch_idx > self.config["early_stop_epoch"]:
-                print('Early stop.')
+                log.info('Early stop.')
                 break
 
 
-    def evaluate(self, data_loader, iter_now=0, name='test', saves_results=False):
+    def evaluate(self, data_loader, iter_now=None, save_name=None):
         # from collections import Counter
         # span_len_cnts = Counter()
 
@@ -334,7 +337,7 @@ class Runner:
         self.model.eval()
 
         with torch.no_grad():
-            print('evaluating')
+            log.info('evaluating')
             evaluator = metrics.CorefEvaluator()
             pr_coref_evaluator = metrics.PrCorefEvaluator()
 
@@ -424,7 +427,7 @@ class Runner:
                     top_ant_mask_of_spans
                 )
 
-                gold_clusters, doc_key, pronoun_info, sentences = dialog_info
+                gold_clusters, image_id, pronoun_info, sentences = dialog_info
 
                 gold_clusters = [
                     tuple(tuple(span) for span in cluster)
@@ -442,12 +445,12 @@ class Runner:
                     mention_to_predicted=span_to_predicted_cluster,
                     mention_to_gold=span_to_gold_cluster
                 )
-                cluster_predictions[doc_key] = predicted_clusters
+                cluster_predictions[image_id] = predicted_clusters
 
                 pr_coref_evaluator.update(predicted_clusters, pronoun_info, sentences)
 
                 if pct >= next_logging_pct:
-                    print(
+                    log.info(
                         f'{int(pct)}%,\ttime:\t{time.time() - start_time:.2f}'
                     )
                     next_logging_pct += 5.
@@ -459,7 +462,7 @@ class Runner:
 
         na_str = 'N/A'
 
-        print(
+        log.info('\n'
             f'avg_valid_time:\t{time.time() - start_time:.2f}\n'
             f'avg loss:\t{avg_loss:.4f}\n'
             f'Coref average precision:\t{epoch_precision:.4f}\n'
@@ -467,26 +470,36 @@ class Runner:
             f'Coref average f1:\t{epoch_f1:.4f}\n'
         )
 
-        # if not self.config['debugging']:
-        self.writer.add_scalar('Val/loss', avg_loss, iter_now)
-        self.writer.add_scalar('Val/coref_precision', epoch_precision, iter_now)
-        self.writer.add_scalar('Val/coref_recall', epoch_recall, iter_now)
-        self.writer.add_scalar('Val/coref_f1', epoch_f1, iter_now)
+        if not self.config['validating']:
+            self.writer.add_scalar('Val/loss', avg_loss, iter_now)
+            self.writer.add_scalar('Val/coref_precision', epoch_precision, iter_now)
+            self.writer.add_scalar('Val/coref_recall', epoch_recall, iter_now)
+            self.writer.add_scalar('Val/coref_f1', epoch_f1, iter_now)
 
         pr_coref_results = pr_coref_evaluator.get_prf()
 
-        print(
+        log.info('\n'
             f'Pronoun_Coref_average_precision:\t{pr_coref_results["p"]:.4f}\n'
             f'Pronoun_Coref_average_recall:\t{pr_coref_results["r"]:.4f}\n'
             f'Pronoun_Coref_average_f1:\t{pr_coref_results["f"]:.4f}\n'
         )
 
-        # if not self.config['debugging']:
-        self.writer.add_scalar('Val/pronoun_coref_precision', pr_coref_results['p'], iter_now)
-        self.writer.add_scalar('Val/pronoun_coref_recall', pr_coref_results['r'], iter_now)
-        self.writer.add_scalar('Val/pronoun_coref_f1', pr_coref_results['f'], iter_now)
+        if not self.config['validating']:
+            self.writer.add_scalar('Val/pronoun_coref_precision', pr_coref_results['p'], iter_now)
+            self.writer.add_scalar('Val/pronoun_coref_recall', pr_coref_results['r'], iter_now)
+            self.writer.add_scalar('Val/pronoun_coref_f1', pr_coref_results['f'], iter_now)
 
-        return pr_coref_results['f']
+        if save_name:
+            file_name = osp.join(self.config['log_dir'], f'{save_name}.json')
+            with open(file_name, 'w') as f:
+                json.dump(cluster_predictions, f)
+            log.info(f'Predicted clusters saved to {file_name}')
+
+        metrics_to_maximize = pr_coref_results['f']
+        results = {'coref_p': epoch_precision, 'coref_r': epoch_recall, 'coref_f1': epoch_f1,
+                   'prp_p': pr_coref_results['p'], 'prp_r': pr_coref_results['r'], 'prp_f1': pr_coref_results['f']}
+
+        return metrics_to_maximize, results
 
     def get_ckpt(self):
         return {
@@ -515,14 +528,14 @@ class Runner:
         )
 
         self.model.load_state_dict(model_state_dict)
-        print('loaded model')
+        log.info('loaded model')
         del model_state_dict
 
         if not self.config['validating'] and not (self.config['uses_new_optimizer'] or self.config['sets_new_lr']):
             #     if ckpt_dict['embedder_optimizer'] and not self.config['freezes_embeddings']:
             #         self.embedder_optimizer.load_state_dict(ckpt_dict['embedder_optimizer'])
             self.optimizer.load_state_dict(ckpt_dict['optimizer'])
-            print('loaded optimizer')
+            log.info('loaded optimizer')
 
         del ckpt_dict
 
@@ -532,13 +545,13 @@ class Runner:
 
     def save_ckpt(self):
         ckpt_path = f'{self.config["log_dir"]}/epoch_{self.epoch_idx}.ckpt'
-        print(f'saving checkpoint {ckpt_path}')
+        log.info(f'saving checkpoint {ckpt_path}')
         torch.save(self.ckpt, f=ckpt_path)
         return ckpt_path
 
     def save_ckpt_best(self):
         ckpt_path = f'{self.config["log_dir"]}/epoch_best.ckpt'
-        print(f'saving checkpoint {ckpt_path}')
+        log.info(f'saving checkpoint {ckpt_path}')
         torch.save(self.ckpt, f=ckpt_path)
         return ckpt_path
 
@@ -549,13 +562,18 @@ class Runner:
             else:
                 ckpt_paths = [path for path in os.listdir(f'{self.config["log_dir"]}/') if path.endswith('.ckpt') and 'best' not in path]
                 if len(ckpt_paths) == 0:
-                    print(f'No .ckpt found in {self.config["log_dir"]}')
+                    log.info(f'No .ckpt found in {self.config["log_dir"]}')
                     return
                 sort_func = lambda x:int(re.search(r"(\d+)", x).groups()[0])
                 ckpt_path = f'{self.config["log_dir"]}/{sorted(ckpt_paths, key=sort_func, reverse=True)[0]}'
 
-        print(f'loading checkpoint {ckpt_path}')
+        log.info(f'loading checkpoint {ckpt_path}')
 
+        self.ckpt = torch.load(ckpt_path)
+
+    def load_ckpt_best(self):
+        ckpt_path = f'{self.config["log_dir"]}/epoch_best.ckpt'
+        log.info(f'loading checkpoint {ckpt_path}')
         self.ckpt = torch.load(ckpt_path)
 
 
@@ -584,7 +602,7 @@ if __name__ == '__main__':
     
     log_file = os.path.join(config["log_dir"], f'{args.mode}.log')
     set_log_file(log_file)
-    print(pyhocon.HOCONConverter.convert(config, "hocon"))
+    log.info(pyhocon.HOCONConverter.convert(config, "hocon"))
 
     config['training'] = args.mode == 'train'
     config['validating'] = args.mode == 'eval'
@@ -592,11 +610,11 @@ if __name__ == '__main__':
 
     # prepare dataset
     if config['training']:
-        splits = {'train': 'train', 'eval': 'val'}
+        splits = {'train': 'train', 'val': 'val', 'test': 'test'}
     elif config['validating']: 
-        splits = {'eval': 'val'}
+        splits = {'val': 'val', 'test': 'test'}
     elif config['debugging']:
-        splits = {'train': 'val', 'eval': 'test'}
+        splits = {'train': 'val', 'val': 'test', 'test': 'test'}
         config['num_epochs'] += 1
     datasets = {
         split: PrpDataset(splits[split], config)
@@ -621,6 +639,15 @@ if __name__ == '__main__':
 
     if config['training'] or config['debugging']:
         runner.train(data_loaders)
-    elif config['validating']:
-        runner.load_ckpt()
-        runner.evaluate(data_loaders['eval'])
+
+    runner.load_ckpt_best()
+    results = {}
+    for split in ['val', 'test']:
+        log.info(f'Results on {split} split of the best epoch')
+        save_name = f'{split}_predicted_clusters_best_epoch'
+        results[split] = runner.evaluate(data_loaders[split], save_name=save_name)[1]
+
+    file_name = osp.join(config['log_dir'], 'metrics.json')
+    with open(file_name, 'w') as f:
+        json.dump(results, f)
+    log.info(f'Results of metrics saved to {file_name}')
